@@ -380,7 +380,12 @@ const CLASS_STAT_BIAS = {
   TECHNICIAN: { hp: 1.0, atk: 1.0, def: 1.0, spd: 1.1 },
   GLITCH:     { hp: 0.7, atk: 1.3, def: 0.6, spd: 1.5 },
 };
-const PROTOCOLS = ['NEC','SONY','SAMSUNG','RC5'];
+const PROTOCOLS_IR = ['NEC','SONY','SAMSUNG','RC5'];
+const PROTOCOLS_RF = ['FIXED','ROLLING','SENSOR','RAW'];
+// Combined for enemy generation
+const PROTOCOLS = PROTOCOLS_IR.concat(PROTOCOLS_RF);
+// 433MHz protocol → class mapping (different flavors)
+const RF_CLASS_MAP = { FIXED: 'BRAWLER', ROLLING: 'TECHNICIAN', SENSOR: 'DEFENDER', RAW: 'GLITCH' };
 
 // Name syllables for procedural naming
 const SYL1 = ['ZAR','NEX','VOL','KRI','PHA','DRE','MOX','SYN','VEX','LUR','GHO','TYR','BYT','NIX','ORC','HEX'];
@@ -413,6 +418,7 @@ function sfxHit()      { beep(200, 0.1, 0.12); }
 function sfxCrit()     { beep(300, 0.06, 0.15); setTimeout(() => beep(600, 0.1, 0.15), 60); }
 function sfxHeal()     { beep(600, 0.1); setTimeout(() => beep(900, 0.15), 100); }
 function sfxScan()     { for(let i=0;i<5;i++) setTimeout(()=>beep(400+i*200,0.06,0.04),i*80); }
+function sfxScanRF()   { for(let i=0;i<8;i++) setTimeout(()=>beep(200+i*80,0.04,0.03,'triangle'),i*50); }
 function sfxVictory()  { [523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,0.15,0.1),i*120)); }
 function sfxDefeat()   { [400,300,200,100].forEach((f,i)=>setTimeout(()=>beep(f,0.2,0.1),i*150)); }
 
@@ -587,9 +593,14 @@ function flushBuffer() {
 // ============================================================
 // PHANTOM GENERATION
 // ============================================================
-function generatePhantom(protocol, address, command) {
-  const classIdx = PROTOCOLS.indexOf(protocol);
-  const cls = CLASSES[classIdx >= 0 ? classIdx : 3];
+function generatePhantom(protocol, address, command, isRF = false) {
+  let cls;
+  if (isRF) {
+    cls = RF_CLASS_MAP[protocol] || 'GLITCH';
+  } else {
+    const classIdx = PROTOCOLS_IR.indexOf(protocol);
+    cls = CLASSES[classIdx >= 0 ? classIdx : 3];
+  }
   const bias = CLASS_STAT_BIAS[cls];
 
   // Stat generation from command byte (0-255)
@@ -642,10 +653,12 @@ function generateEnemy(floor) {
   let s = floor * 2654435761 >>> 0;
   const next = () => { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (s >>> 0); };
 
-  const proto = PROTOCOLS[next() % 4];
-  const addr = next() & 0x3F;
+  const protoIdx = next() % PROTOCOLS.length;
+  const proto = PROTOCOLS[protoIdx];
+  const isRF = protoIdx >= PROTOCOLS_IR.length;
+  const addr = next() & (isRF ? 0xFFFFFF : 0xFF);
   const cmd = next() & 0xFF;
-  const enemy = generatePhantom(proto, addr, cmd);
+  const enemy = generatePhantom(proto, addr, cmd, isRF);
   enemy.name = 'C-' + enemy.name;
 
   // Scale stats with floor
@@ -704,6 +717,7 @@ const game = {
   maxCursor: 0,
   tick: 0,
   subState: null,
+  scanMode: 'IR',
   // Combat state
   combat: null,
   // Scan state
@@ -775,7 +789,7 @@ function inputMenu(key) {
   if (key === 'ok') {
     sfxSelect();
     switch (game.cursor) {
-      case 0: setState('SCAN'); game.scanTimer = 0; break;
+      case 0: setState('SCAN'); game.scanTimer = 0; game.subState = null; break;
       case 1:
         if (!game.activePhantom) { showMessage('NO PHANTOM YET!'); sfxBack(); }
         else setState('PHANTOM');
@@ -790,11 +804,20 @@ function inputMenu(key) {
 }
 
 function inputScan(key) {
-  if (key === 'back') { sfxBack(); setState('MENU'); return; }
-  if (key === 'ok' && game.subState === null) {
-    sfxScan();
-    game.subState = 'SCANNING';
-    game.scanTimer = 0;
+  // Mode selection
+  if (game.subState === null) {
+    if (key === 'back') { sfxBack(); setState('MENU'); return; }
+    if (key === 'up' || key === 'down') {
+      game.scanMode = game.scanMode === 'IR' ? 'RF' : 'IR';
+      sfxNavigate();
+      return;
+    }
+    if (key === 'ok') {
+      if (game.scanMode === 'RF') sfxScanRF(); else sfxScan();
+      game.subState = 'SCANNING';
+      game.scanTimer = 0;
+    }
+    return;
   }
 }
 
@@ -970,7 +993,7 @@ function executeTurn(actionIdx) {
         const res = calcDamage(c.player, c.enemy, true);
         c.enemy.hp -= res.damage;
         c.player.heat += 35;
-        c.log.push('SKILL: ' + res.damage + (res.isCrit ? ' CRIT!' : ''));
+        c.log.push('BURST: ' + res.damage + (res.isCrit ? ' CRIT!' : ''));
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 6; sfxHit(); }
         break;
       }
@@ -1051,7 +1074,7 @@ function enemyTurn() {
         if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
         c.player.hp -= dmg;
         c.enemy.heat += 35;
-        c.log.push('FOE SKILL: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
+        c.log.push('FOE BURST: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
         screenShake = 6; sfxHit();
         break;
       }
@@ -1151,37 +1174,77 @@ function renderScan() {
   clearBuffer();
 
   if (game.subState === null) {
-    drawTextCentered('INFRARED SCAN', 4);
-    drawLine(0, 12, 127, 12);
+    // Scan type selection
+    drawTextCentered('SCAN TYPE', 2);
+    drawLine(0, 9, 127, 9);
 
-    // Draw IR receiver icon
-    const cx = 64, cy = 34;
-    drawCircle(cx, cy, 8);
-    drawCircle(cx, cy, 4, true);
+    // IR option
+    if (game.scanMode === 'IR') {
+      drawRect(0, 13, 128, 22, true);
+      drawText('  INFRARED  ', 8, 16, true);
+      drawText('TV/AC/LED', 8, 24, true);
+    } else {
+      drawText('  INFRARED  ', 8, 16);
+      drawText('TV/AC/LED', 8, 24);
+    }
 
-    drawTextCentered('POINT REMOTE', 48);
-    drawTextCentered('PRESS OK TO SCAN', 56);
+    // RF option
+    if (game.scanMode === 'RF') {
+      drawRect(0, 37, 128, 22, true);
+      drawText('  433MHZ RF  ', 8, 40, true);
+      drawText('FOB/SENSOR', 8, 48, true);
+    } else {
+      drawText('  433MHZ RF  ', 8, 40);
+      drawText('FOB/SENSOR', 8, 48);
+    }
+
+    drawTextCentered('UP/DN:SWITCH  OK:SCAN', 59);
   }
   else if (game.subState === 'SCANNING') {
     game.scanTimer++;
-    drawTextCentered('SCANNING...', 4);
 
-    // Animated concentric circles
-    const cx = 64, cy = 32;
-    const phase = game.scanTimer;
-    for (let r = 1; r < 4; r++) {
-      const radius = ((phase * 2 + r * 8) % 28) + 2;
-      if (radius < 25) drawCircle(cx, cy, radius);
+    if (game.scanMode === 'IR') {
+      drawTextCentered('IR SCANNING...', 4);
+      // Animated concentric circles
+      const cx = 64, cy = 32;
+      const phase = game.scanTimer;
+      for (let r = 1; r < 4; r++) {
+        const radius = ((phase * 2 + r * 8) % 28) + 2;
+        if (radius < 25) drawCircle(cx, cy, radius);
+      }
+    } else {
+      drawTextCentered('RF SCANNING...', 4);
+      // Animated radio waves (sine waves)
+      const t = game.scanTimer;
+      for (let wave = 0; wave < 3; wave++) {
+        const baseY = 22 + wave * 12;
+        const amp = 3 + wave * 1.5;
+        for (let x = 20; x < 108; x++) {
+          const y = baseY + Math.floor(Math.sin((x + t * 2) * 0.2 + wave) * amp);
+          if ((x + t + wave * 8) % 4 === 0) setPixel(x, y);
+        }
+      }
+      // Antenna icon
+      drawLine(64, 6, 64, 14);
+      drawLine(64, 14, 58, 20);
+      drawLine(64, 14, 70, 20);
     }
 
-    // "Signal detected" after delay
+    // Signal detected after delay
     if (game.scanTimer > 40) {
-      // Generate random IR data
-      const proto = PROTOCOLS[Math.floor(Math.random() * 4)];
-      const addr = Math.floor(Math.random() * 256);
-      const cmd = Math.floor(Math.random() * 256);
+      let proto, addr, cmd;
+      if (game.scanMode === 'IR') {
+        proto = PROTOCOLS_IR[Math.floor(Math.random() * 4)];
+        addr = Math.floor(Math.random() * 256);
+        cmd = Math.floor(Math.random() * 256);
+      } else {
+        proto = PROTOCOLS_RF[Math.floor(Math.random() * 4)];
+        // 433MHz signals: 24-bit address + 8-bit command typical
+        addr = Math.floor(Math.random() * 0xFFFFFF);
+        cmd = Math.floor(Math.random() * 256);
+      }
 
-      game.pendingPhantom = generatePhantom(proto, addr, cmd);
+      game.pendingPhantom = generatePhantom(proto, addr, cmd, game.scanMode === 'RF');
       game.subState = null;
       setState('SUMMON');
       game.subState = 'REVEAL';
@@ -1237,8 +1300,13 @@ function renderSummon() {
   drawText('DEF' + es.def, 26, 39);
   drawText('SPD' + es.spd, 70, 39);
 
-  // Protocol info
-  drawText(p.protocol + ' ' + p.address.toString(16).toUpperCase() + ':' + p.command.toString(16).toUpperCase(), 2, 48);
+  // Protocol info — show scan origin
+  const originTag = PROTOCOLS_IR.includes(p.protocol) ? 'IR' : 'RF';
+  const addrHex = p.address.toString(16).toUpperCase();
+  const cmdHex = p.command.toString(16).toUpperCase();
+  // Truncate long RF addresses
+  const addrDisplay = addrHex.length > 6 ? addrHex.substring(0, 4) + '..' : addrHex;
+  drawText(originTag + ' ' + p.protocol + ' ' + addrDisplay + ':' + cmdHex, 2, 48);
 
   // Keep / Discard
   if (game.cursor === 0) {
@@ -1277,7 +1345,8 @@ function renderPhantom() {
     drawText('+' + p.upgrades.hp + ' +' + p.upgrades.atk + ' +' + p.upgrades.def + ' +' + p.upgrades.spd, 26, 42);
   }
 
-  drawText(p.protocol, 2, 56);
+  const originTag = PROTOCOLS_IR.includes(p.protocol) ? 'IR:' : 'RF:';
+  drawText(originTag + p.protocol, 2, 56);
   drawText('BACK', 100, 56);
 
   flushBuffer();
@@ -1334,21 +1403,30 @@ function renderCombat() {
   drawLine(0, 50, 127, 50);
 
   if (c.state === 'PLAYER_TURN') {
-    const actions = ['ATTACK', 'SKILL', 'DEFEND'];
+    const actions = [
+      { label: 'ATK', hint: '+20 HEAT', dpad: 'UP' },
+      { label: 'BURST', hint: '+35 HEAT x1.5', dpad: 'RT' },
+      { label: 'DEF', hint: '-30 HEAT BLOCK', dpad: 'DN' },
+    ];
     const positions = [
-      { x: 2, y: 53, label: 'UP:ATK' },
-      { x: 46, y: 53, label: 'RT:SKL' },
-      { x: 86, y: 53, label: 'DN:DEF' },
+      { x: 2,  y: 53 },
+      { x: 44, y: 53 },
+      { x: 86, y: 53 },
     ];
     for (let i = 0; i < 3; i++) {
+      const lbl = positions[i].dpad ? '' : '';
       if (i === game.cursor) {
-        const w = positions[i].label.length * CHAR_W + 4;
+        const w = (actions[i].label.length + 3) * CHAR_W + 2;
         drawRect(positions[i].x - 1, positions[i].y - 1, w, CHAR_H + 3, true);
-        drawText(positions[i].label, positions[i].x + 1, positions[i].y, true);
+        drawText(actions[i].dpad + ':' + actions[i].label, positions[i].x + 1, positions[i].y, true);
       } else {
-        drawText(positions[i].label, positions[i].x + 1, positions[i].y);
+        drawText(actions[i].dpad + ':' + actions[i].label, positions[i].x + 1, positions[i].y);
       }
     }
+
+    // Hint line: show what the selected action's heat effect is
+    const sel = actions[game.cursor];
+    drawText(sel.hint, Math.floor((128 - sel.hint.length * CHAR_W) / 2), 57, true);
 
     // Heat warning
     if (c.player.heat >= 70 && game.tick % 20 < 10) {
