@@ -732,6 +732,8 @@ const game = {
   combatAnim: null,
   combatAnimTimer: 0,
   combatLog: [],
+  // Exit flag
+  exited: false,
 };
 
 function setState(newState) {
@@ -779,10 +781,20 @@ function inputTitle(key) {
     loadGame();
     setState('MENU');
   }
+  if (key === 'back') {
+    // Exit app — wipe save, show goodbye, stop loop
+    sfxBack();
+    game.activePhantom = null;
+    game.storedPhantoms = [];
+    game.dataShards = 0;
+    game.currentFloor = 1;
+    try { localStorage.removeItem('eotp_save'); } catch(e) {}
+    game.exited = true;
+  }
 }
 
 function inputMenu(key) {
-  const items = ['SCAN', 'MY PHANTOM', 'DESCEND', 'CAMP'];
+  const items = ['SCAN', 'MY PHANTOM', 'ASCEND', 'DESCEND', 'CAMP'];
   game.maxCursor = items.length - 1;
   if (key === 'up') { game.cursor = Math.max(0, game.cursor - 1); sfxNavigate(); }
   if (key === 'down') { game.cursor = Math.min(game.maxCursor, game.cursor + 1); sfxNavigate(); }
@@ -795,10 +807,20 @@ function inputMenu(key) {
         else setState('PHANTOM');
         break;
       case 2:
-        if (!game.activePhantom) { showMessage('SCAN A PHANTOM FIRST!'); sfxBack(); }
+        if (game.currentFloor > 1) {
+          game.currentFloor--;
+          saveGame();
+          showMessage('ASCENDED!');
+        } else {
+          showMessage('AT SURFACE!');
+          sfxBack();
+        }
+        break;
+      case 3:
+        if (!game.activePhantom) { showMessage('SCAN FIRST!'); sfxBack(); }
         else { setState('COMBAT'); startCombat(); }
         break;
-      case 3: setState('CAMP'); break;
+      case 4: setState('CAMP'); break;
     }
   }
 }
@@ -842,7 +864,7 @@ function inputSummon(key) {
         }
         game.activePhantom = game.pendingPhantom;
         saveGame();
-        showMessage('PHANTOM ACQUIRED!');
+        showMessage('ACQUIRED!');
       }
       setState('MENU');
     }
@@ -856,11 +878,11 @@ function inputPhantom(key) {
 
 function inputCombat(key) {
   if (!game.combat || game.combat.state !== 'PLAYER_TURN') return;
-  const actions = ['ATTACK','SKILL','DEFEND'];
-  game.maxCursor = actions.length - 1;
-  if (key === 'up')   { game.cursor = 0; sfxNavigate(); }
-  if (key === 'right'){ game.cursor = 1; sfxNavigate(); }
-  if (key === 'down') { game.cursor = 2; sfxNavigate(); }
+  const numActions = 3;  // ATK, BURST, DEF
+  if (key === 'up')   { game.cursor = (game.cursor - 1 + numActions) % numActions; sfxNavigate(); }
+  if (key === 'right'){ game.cursor = (game.cursor + 1) % numActions; sfxNavigate(); }
+  if (key === 'down') { game.cursor = (game.cursor + 1) % numActions; sfxNavigate(); }
+  if (key === 'left') { game.cursor = (game.cursor - 1 + numActions) % numActions; sfxNavigate(); }
   if (key === 'ok') {
     sfxSelect();
     executeTurn(game.cursor);
@@ -872,7 +894,11 @@ function inputVictory(key) {
 }
 
 function inputDefeat(key) {
-  if (key === 'ok') { sfxSelect(); setState('MENU'); }
+  if (key === 'ok') {
+    sfxSelect();
+    // Phantom already wiped in combat loss handler
+    setState('MENU');
+  }
 }
 
 function inputCamp(key) {
@@ -906,7 +932,7 @@ function inputUpgrade(key) {
         sfxHeal();
         saveGame();
       } else {
-        showMessage('NOT ENOUGH SHARDS!');
+        showMessage('NOT ENOUGH!');
         sfxBack();
       }
     } else {
@@ -918,22 +944,28 @@ function inputUpgrade(key) {
 }
 
 function inputCollection(key) {
-  const total = game.storedPhantoms.length;
+  const total = game.storedPhantoms.length + (game.activePhantom ? 1 : 0);
   if (key === 'up' || key === 'left') { game.collectionIdx = Math.max(0, game.collectionIdx - 1); sfxNavigate(); }
-  if (key === 'down' || key === 'right') { game.collectionIdx = Math.min(Math.max(0, total - 1), game.collectionIdx + 1); sfxNavigate(); }
+  if (key === 'down' || key === 'right') { game.collectionIdx = Math.min(total - 1, game.collectionIdx + 1); sfxNavigate(); }
   if (key === 'ok' && total > 0) {
-    // Set as active
-    const selected = game.storedPhantoms[game.collectionIdx];
-    if (game.activePhantom) {
-      game.storedPhantoms[game.collectionIdx] = game.activePhantom;
+    // Selecting active phantom is a no-op
+    if (game.activePhantom && game.collectionIdx === 0) {
+      sfxBack();
+      setState('CAMP');
     } else {
-      game.storedPhantoms.splice(game.collectionIdx, 1);
+      const si = game.collectionIdx - (game.activePhantom ? 1 : 0);
+      const selected = game.storedPhantoms[si];
+      if (game.activePhantom) {
+        game.storedPhantoms[si] = game.activePhantom;
+      } else {
+        game.storedPhantoms.splice(si, 1);
+      }
+      game.activePhantom = selected;
+      sfxSelect();
+      showMessage('SET ACTIVE!');
+      saveGame();
+      setState('CAMP');
     }
-    game.activePhantom = selected;
-    sfxSelect();
-    showMessage('SET AS ACTIVE!');
-    saveGame();
-    setState('CAMP');
   }
   if (key === 'back') { sfxBack(); setState('CAMP'); }
 }
@@ -1017,6 +1049,17 @@ function executeTurn(actionIdx) {
     screenShake = 8;
   }
 
+  // Check player death from overload
+  if (c.player.hp <= 0) {
+    c.player.hp = 0;
+    c.state = 'LOSE';
+    game.activePhantom = null;
+    saveGame();
+    sfxDefeat();
+    setTimeout(() => setState('DEFEAT'), 800);
+    return;
+  }
+
   // Check enemy defeat
   if (c.enemy.hp <= 0) {
     c.enemy.hp = 0;
@@ -1096,10 +1139,26 @@ function enemyTurn() {
     c.log.push('FOE OVERLOAD! -' + ovDmg);
   }
 
+  // Check enemy defeat from overload
+  if (c.enemy.hp <= 0) {
+    c.enemy.hp = 0;
+    c.state = 'WIN';
+    const shards = game.currentFloor + 1;
+    game.dataShards += shards;
+    game.currentFloor++;
+    saveGame();
+    sfxVictory();
+    game.combat.shardReward = shards;
+    setTimeout(() => setState('VICTORY'), 800);
+    return;
+  }
+
   // Check player defeat
   if (c.player.hp <= 0) {
     c.player.hp = 0;
     c.state = 'LOSE';
+    game.activePhantom = null;
+    saveGame();
     sfxDefeat();
     setTimeout(() => setState('DEFEAT'), 800);
     return;
@@ -1145,7 +1204,7 @@ function renderTitle() {
 
 function renderMenu() {
   clearBuffer();
-  const items = ['SCAN','MY PHANTOM','DESCEND','CAMP'];
+  const items = ['SCAN','MY PHANTOM','ASCEND','DESCEND','CAMP'];
   drawText('MENU', 2, 2);
   drawLine(0, 9, 127, 9);
 
@@ -1155,9 +1214,9 @@ function renderMenu() {
   drawText('F' + game.currentFloor, 108, 2);
 
   for (let i = 0; i < items.length; i++) {
-    const y = 14 + i * 12;
+    const y = 14 + i * 10;
     if (i === game.cursor) {
-      drawRect(0, y - 1, 128, 11, true);
+      drawRect(0, y - 1, 128, 7, true);
       drawText(items[i], 12, y, true);
       // Arrow
       drawText('>', 3, y, true);
@@ -1209,7 +1268,7 @@ function renderScan() {
       const cx = 64, cy = 32;
       const phase = game.scanTimer;
       for (let r = 1; r < 4; r++) {
-        const radius = ((phase * 2 + r * 8) % 28) + 2;
+        const radius = ((phase + r * 16) % 56) + 2;
         if (radius < 25) drawCircle(cx, cy, radius);
       }
     } else {
@@ -1220,7 +1279,7 @@ function renderScan() {
         const baseY = 22 + wave * 12;
         const amp = 3 + wave * 1.5;
         for (let x = 20; x < 108; x++) {
-          const y = baseY + Math.floor(Math.sin((x + t * 2) * 0.2 + wave) * amp);
+          const y = baseY + Math.floor(Math.sin((x + t) * 0.15 + wave) * amp);
           if ((x + t + wave * 8) % 4 === 0) setPixel(x, y);
         }
       }
@@ -1263,8 +1322,8 @@ function renderSummon() {
   if (game.subState === 'REVEAL') {
     game.scanTimer++;
     // Reveal animation: static noise clearing to show phantom
-    if (game.scanTimer < 25) {
-      const progress = game.scanTimer / 25;
+    if (game.scanTimer < 50) {
+      const progress = game.scanTimer / 50;
       // Draw noise that gradually clears
       for (let y = 0; y < 64; y++) {
         for (let x = 0; x < 128; x++) {
@@ -1404,33 +1463,35 @@ function renderCombat() {
 
   if (c.state === 'PLAYER_TURN') {
     const actions = [
-      { label: 'ATK', hint: '+20 HEAT', dpad: 'UP' },
-      { label: 'BURST', hint: '+35 HEAT x1.5', dpad: 'RT' },
-      { label: 'DEF', hint: '-30 HEAT BLOCK', dpad: 'DN' },
+      { label: 'ATK', hint: 'HIT  +20h', dpad: 'UP' },
+      { label: 'BURST', hint: 'x1.5 +35h', dpad: 'RT' },
+      { label: 'DEF', hint: 'BLOCK -30h', dpad: 'DN' },
     ];
     const positions = [
-      { x: 2,  y: 53 },
-      { x: 44, y: 53 },
-      { x: 86, y: 53 },
+      { x: 2,  y: 52 },
+      { x: 44, y: 52 },
+      { x: 86, y: 52 },
     ];
     for (let i = 0; i < 3; i++) {
-      const lbl = positions[i].dpad ? '' : '';
       if (i === game.cursor) {
-        const w = (actions[i].label.length + 3) * CHAR_W + 2;
-        drawRect(positions[i].x - 1, positions[i].y - 1, w, CHAR_H + 3, true);
-        drawText(actions[i].dpad + ':' + actions[i].label, positions[i].x + 1, positions[i].y, true);
+        const w = (actions[i].dpad.length + 1 + actions[i].label.length) * CHAR_W + 4;
+        drawRect(positions[i].x, positions[i].y - 1, w, 6, true);
+        drawText(actions[i].dpad + ':' + actions[i].label, positions[i].x + 2, positions[i].y, true);
       } else {
-        drawText(actions[i].dpad + ':' + actions[i].label, positions[i].x + 1, positions[i].y);
+        drawText(actions[i].dpad + ':' + actions[i].label, positions[i].x + 2, positions[i].y);
       }
     }
 
     // Hint line: show what the selected action's heat effect is
     const sel = actions[game.cursor];
-    drawText(sel.hint, Math.floor((128 - sel.hint.length * CHAR_W) / 2), 57, true);
+    drawTextCentered(sel.hint, 59);
 
-    // Heat warning
-    if (c.player.heat >= 70 && game.tick % 20 < 10) {
-      drawText('!HOT!', 48, 58);
+    // Heat danger — flash frame around heat bars
+    if (c.player.heat >= 70 && game.tick % 16 < 8) {
+      drawRect(6, 7, 58, 6);
+    }
+    if (c.enemy.heat >= 70 && game.tick % 16 < 8) {
+      drawRect(74, 7, 54, 6);
     }
   } else if (c.state === 'ENEMY_TURN') {
     drawTextCentered('ENEMY TURN...', 55);
@@ -1483,7 +1544,7 @@ function renderDefeat() {
   }
 
   drawTextCentered('YOUR PHANTOM', 42);
-  drawTextCentered('WAS CORRUPTED', 50);
+  drawTextCentered('WAS KILLED', 50);
 
   if (Math.floor(t / 20) % 2 === 0)
     drawTextCentered('PRESS OK', 58);
@@ -1501,7 +1562,7 @@ function renderCamp() {
   for (let i = 0; i < items.length; i++) {
     const y = 14 + i * 12;
     if (i === game.cursor) {
-      drawRect(0, y - 1, 128, 11, true);
+      drawRect(0, y - 1, 128, 7, true);
       drawText(items[i], 12, y, true);
       drawText('>', 3, y, true);
     } else {
@@ -1531,7 +1592,7 @@ function renderUpgrade() {
     const cost = (p.upgrades[stats[i].toLowerCase()] + 1) * 3;
     const label = stats[i] + ' ' + vals[i] + ' +' + p.upgrades[stats[i].toLowerCase()] + ' ($' + cost + ')';
     if (i === game.cursor) {
-      drawRect(0, y - 1, 128, 9, true);
+      drawRect(0, y - 1, 128, 7, true);
       drawText(label, 4, y, true);
     } else {
       drawText(label, 4, y);
@@ -1541,7 +1602,7 @@ function renderUpgrade() {
   // Back option
   const backY = 54;
   if (game.cursor === 4) {
-    drawRect(0, backY - 1, 128, 9, true);
+    drawRect(0, backY - 1, 128, 7, true);
     drawText('BACK', 4, backY, true);
   } else {
     drawText('BACK', 4, backY);
@@ -1553,17 +1614,23 @@ function renderUpgrade() {
 
 function renderCollection() {
   clearBuffer();
-  const list = game.storedPhantoms;
+  const total = game.storedPhantoms.length + (game.activePhantom ? 1 : 0);
 
   drawText('COLLECTION', 2, 2);
-  drawText(list.length + '/10', 90, 2);
+  drawText(total + '/11', 90, 2);
   drawLine(0, 9, 127, 9);
 
-  if (list.length === 0) {
+  if (total === 0) {
     drawTextCentered('EMPTY', 28);
     drawTextCentered('SCAN PHANTOMS FIRST', 38);
   } else {
-    const p = list[game.collectionIdx];
+    let p;
+    if (game.activePhantom && game.collectionIdx === 0) {
+      p = game.activePhantom;
+    } else {
+      const si = game.collectionIdx - (game.activePhantom ? 1 : 0);
+      p = game.storedPhantoms[si];
+    }
     // Sprite
     drawSprite(p.sprite, 4, 14);
 
@@ -1571,12 +1638,12 @@ function renderCollection() {
     drawText(p.name, 26, 14);
     drawText(p.cls, 26, 22);
     const ps = getEffectiveStats(p);
-    drawText('HP' + ps.hp + ' A' + ps.atk, 26, 32);
+    drawText('HP ' + ps.hp + ' A' + ps.atk, 26, 32);
     drawText('D' + ps.def + ' S' + ps.spd, 26, 40);
 
     // Navigation
-    drawText((game.collectionIdx+1) + '/' + list.length, 2, 56);
-    drawText('OK=SET ACTIVE', 44, 56);
+    drawText((game.collectionIdx+1) + '/' + total, 2, 56);
+    drawText('OK=SET', 44, 56);
   }
 
   flushBuffer();
@@ -1589,20 +1656,26 @@ function renderMessageOverlay() {
   const x = Math.floor((SCREEN_W - w) / 2);
   const y = 24;
 
-  // Clear area
-  for (let py = y; py < y + 14; py++)
-    for (let px = x - 2; px < x + w + 2; px++)
-      setPixel(px, py, false);
-
+  // Draw border
   drawRect(x - 2, y, w + 4, 14);
-  drawRect(x - 1, y + 1, w + 2, 12);
-  drawText(msg, x + 4, y + 4);
+  // Fill box with ON (foreground) pixels
+  drawRect(x - 1, y + 1, w + 2, 12, true);
+  // Draw text INVERTED so it appears as BG-color text on the filled box
+  drawText(msg, x + 4, y + 4, true);
 }
 
 // ============================================================
 // MAIN LOOP
 // ============================================================
 function render() {
+  if (game.exited) {
+    // Draw final goodbye frame once, then stop
+    clearBuffer();
+    drawTextCentered('GOODBYE', 28);
+    flushBuffer();
+    return;
+  }
+
   switch (game.state) {
     case 'TITLE':      renderTitle(); break;
     case 'MENU':       renderMenu(); break;
@@ -1625,6 +1698,10 @@ function render() {
 }
 
 function gameLoop() {
+  if (game.exited) {
+    render();  // draw goodbye once more
+    return;    // then stop forever
+  }
   game.tick++;
   render();
   requestAnimationFrame(gameLoop);

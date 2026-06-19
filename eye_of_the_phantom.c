@@ -395,6 +395,13 @@ static void combat_player_action(EyePhantomApp* app, uint8_t action) {
         snprintf(c->log, COMBAT_LOG_LEN, "OVERLOAD! -%d", ov_dmg);
     }
 
+    /* Check player defeat from overload */
+    if(c->player.hp <= 0) {
+        c->player.hp = 0;
+        c->state = COMBAT_LOSE;
+        return;
+    }
+
     /* Check enemy defeat */
     if(c->enemy.hp <= 0) {
         c->enemy.hp = 0;
@@ -462,6 +469,13 @@ static void combat_enemy_action(EyePhantomApp* app) {
         c->enemy.heat = 100;
         int16_t ov_dmg = c->enemy.max_hp * 8 / 100;
         c->enemy.hp -= ov_dmg;
+    }
+
+    /* Check enemy defeat from overload */
+    if(c->enemy.hp <= 0) {
+        c->enemy.hp = 0;
+        c->state = COMBAT_WIN;
+        return;
     }
 
     /* Check player defeat */
@@ -774,9 +788,9 @@ static void render_menu(Canvas* c, EyePhantomApp* app) {
 
     canvas_draw_line(c, 0, 9, 127, 9);
 
-    const char* items[] = {"SCAN", "MY PHANTOM", "DESCEND", "CAMP"};
-    for(int i = 0; i < 4; i++) {
-        int y = 14 + i * 12;
+    const char* items[] = {"SCAN", "MY PHANTOM", "ASCEND", "DESCEND", "CAMP"};
+    for(int i = 0; i < 5; i++) {
+        int y = 14 + i * 10;
         if(i == app->cursor) {
             canvas_draw_box(c, 0, y - 1, 128, 7);
             canvas_invert_color(c);
@@ -797,7 +811,7 @@ static void render_scan(Canvas* c, EyePhantomApp* app) {
         draw_str_centered(c, "IR SCANNING...", 4);
         int cx = 64, cy = 32;
         for(int r = 1; r < 4; r++) {
-            int radius = ((t * 2 + r * 8) % 28) + 2;
+            int radius = ((t + r * 16) % 56) + 2;
             if(radius < 25) canvas_draw_circle(c, cx, cy, radius);
         }
     } else {
@@ -816,8 +830,8 @@ static void render_summon(Canvas* c, EyePhantomApp* app) {
 
     if(app->summon_reveal) {
         app->reveal_timer++;
-        if(app->reveal_timer < 25) {
-            float progress = app->reveal_timer / 25.0f;
+        if(app->reveal_timer < 50) {
+            float progress = app->reveal_timer / 50.0f;
             /* Noise reveal */
             for(int y = 0; y < SCREEN_H; y++)
                 for(int x = 0; x < SCREEN_W; x++)
@@ -1041,7 +1055,7 @@ static void render_defeat(Canvas* c, EyePhantomApp* app) {
     }
 
     draw_str_centered(c, "YOUR PHANTOM", 42);
-    draw_str_centered(c, "WAS CORRUPTED", 50);
+    draw_str_centered(c, "WAS KILLED", 50);
 
     if((t / 20) % 2 == 0)
         draw_str_centered(c, "PRESS OK", 58);
@@ -1116,17 +1130,26 @@ static void render_upgrade(Canvas* c, EyePhantomApp* app) {
 static void render_collection(Canvas* c, EyePhantomApp* app) {
     canvas_clear(c);
 
+    uint8_t total = app->stored_count + (app->has_active ? 1 : 0);
+
     draw_str(c, "COLLECTION", 2, 2);
     char buf[32];
-    snprintf(buf, sizeof(buf), "%u/10", app->stored_count);
+    snprintf(buf, sizeof(buf), "%u/11", total);
     draw_str(c, buf, 90, 2);
     canvas_draw_line(c, 0, 9, 127, 9);
 
-    if(app->stored_count == 0) {
+    if(total == 0) {
         draw_str_centered(c, "EMPTY", 28);
         draw_str_centered(c, "SCAN PHANTOMS FIRST", 38);
     } else {
-        Phantom* p = &app->stored[app->collection_idx];
+        Phantom* p;
+        if(app->has_active && app->collection_idx == 0) {
+            p = &app->active_phantom;
+        } else {
+            uint8_t si = app->collection_idx - (app->has_active ? 1 : 0);
+            p = &app->stored[si];
+        }
+
         draw_sprite(c, p->sprite, 4, 14);
         draw_str(c, p->name, 26, 14);
         draw_str(c, CLASS_NAMES[p->cls], 26, 22);
@@ -1138,7 +1161,7 @@ static void render_collection(Canvas* c, EyePhantomApp* app) {
         snprintf(buf, sizeof(buf), "D%d S%d", def, spd);
         draw_str(c, buf, 26, 40);
 
-        snprintf(buf, sizeof(buf), "%u/%u", app->collection_idx + 1, app->stored_count);
+        snprintf(buf, sizeof(buf), "%u/%u", app->collection_idx + 1, total);
         draw_str(c, buf, 2, 56);
         draw_str(c, "OK=SET", 44, 56);
     }
@@ -1151,7 +1174,10 @@ static void render_message(Canvas* c, EyePhantomApp* app) {
     int y = 24;
     canvas_draw_frame(c, x - 2, y, w + 4, 14);
     canvas_draw_box(c, x - 1, y + 1, w + 2, 12);
+    /* Invert so text is visible over the filled box */
+    canvas_invert_color(c);
     draw_str(c, app->message, x + 4, y + 4);
+    canvas_invert_color(c);
 }
 
 /* ================================================================
@@ -1184,26 +1210,31 @@ static void app_draw(Canvas* c, void* context) {
 
 static void app_input(InputEvent* event, void* context) {
     EyePhantomApp* app = (EyePhantomApp*)context;
-    if(event->type != InputTypePress) return;
+    if(event->type != InputTypePress && event->type != InputTypeShort &&
+       event->type != InputTypeLong) return;
 
     InputKey key = event->key;
+    bool is_nav = (event->type == InputTypePress);   /* d-pad: responsive */
+    bool is_act = (event->type == InputTypeShort || event->type == InputTypeLong); /* OK/Back: single fire */
 
     switch(app->scene) {
         case SCENE_TITLE: {
-            if(key == InputKeyOk) {
+            if(key == InputKeyOk && is_act) {
                 game_load(app);
                 app->scene = SCENE_MENU;
                 app->cursor = 0;
             }
-            if(key == InputKeyBack) {
+            if(key == InputKeyBack) {  /* any type — Press fires before GUI consumes it, Short is standard */
                 app->running = false;
             }
             break;
         }
         case SCENE_MENU: {
-            if(key == InputKeyUp)   { if(app->cursor > 0) app->cursor--; }
-            if(key == InputKeyDown) { if(app->cursor < 3) app->cursor++; }
-            if(key == InputKeyOk) {
+            if(is_nav) {
+                if(key == InputKeyUp)   { if(app->cursor > 0) app->cursor--; }
+                if(key == InputKeyDown) { if(app->cursor < 4) app->cursor++; }
+            }
+            if(key == InputKeyOk && is_act) {
                 switch(app->cursor) {
                     case 0: scan_ir_start(app); app->scene = SCENE_SCAN; break;
                     case 1:
@@ -1213,6 +1244,17 @@ static void app_input(InputEvent* event, void* context) {
                         } else app->scene = SCENE_PHANTOM;
                         break;
                     case 2:
+                        if(app->current_floor > 1) {
+                            app->current_floor--;
+                            game_save(app);
+                            strncpy(app->message, "ASCENDED!", 32);
+                            app->message_timer = 60;
+                        } else {
+                            strncpy(app->message, "AT SURFACE!", 32);
+                            app->message_timer = 60;
+                        }
+                        break;
+                    case 3:
                         if(!app->has_active) {
                             strncpy(app->message, "SCAN FIRST!", 32);
                             app->message_timer = 60;
@@ -1221,31 +1263,34 @@ static void app_input(InputEvent* event, void* context) {
                             app->scene = SCENE_COMBAT;
                         }
                         break;
-                    case 3: app->scene = SCENE_CAMP; app->cursor = 0; break;
+                    case 4: app->scene = SCENE_CAMP; app->cursor = 0; break;
                 }
+            }
+            if(key == InputKeyBack && is_act) {
+                app->scene = SCENE_TITLE;
+                app->cursor = 0;
             }
             break;
         }
         case SCENE_SCAN: {
-            if(key == InputKeyBack) {
+            if(key == InputKeyBack && is_act) {
                 if(app->ir_running) scan_ir_stop(app);
                 app->scene = SCENE_MENU;
             }
-            if(key == InputKeyOk && !app->ir_running) {
+            if(key == InputKeyOk && is_act && !app->ir_running) {
                 scan_ir_start(app);
             }
             break;
         }
         case SCENE_SUMMON: {
-            if(key == InputKeyLeft || key == InputKeyRight)
+            if(is_nav && (key == InputKeyLeft || key == InputKeyRight))
                 app->cursor = app->cursor ? 0 : 1;
-            if(key == InputKeyOk) {
+            if(key == InputKeyOk && is_act) {
                 if(app->cursor == 0) { /* KEEP */
                     if(app->has_active) {
                         if(app->stored_count < MAX_STORED_PHANTOMS) {
                             app->stored[app->stored_count++] = app->active_phantom;
                         } else {
-                            /* Shift oldest out */
                             memmove(app->stored, app->stored + 1,
                                     (MAX_STORED_PHANTOMS - 1) * sizeof(Phantom));
                             app->stored[MAX_STORED_PHANTOMS - 1] = app->active_phantom;
@@ -1259,22 +1304,25 @@ static void app_input(InputEvent* event, void* context) {
                 }
                 app->scene = SCENE_MENU;
             }
-            if(key == InputKeyBack) { app->scene = SCENE_MENU; }
+            if(key == InputKeyBack && is_act) { app->scene = SCENE_MENU; }
             break;
         }
         case SCENE_PHANTOM: {
-            if(key == InputKeyBack) app->scene = SCENE_MENU;
+            if(key == InputKeyBack && is_act) app->scene = SCENE_MENU;
             break;
         }
         case SCENE_COMBAT: {
             Combat* co = &app->combat;
             if(co->state != COMBAT_PLAYER_TURN) break;
 
-            if(key == InputKeyUp)    app->cursor = 0;
-            if(key == InputKeyRight) app->cursor = 1;
-            if(key == InputKeyDown)  app->cursor = 2;
+            if(is_nav) {
+                if(key == InputKeyUp)    app->cursor = (app->cursor + 2) % 3;
+                if(key == InputKeyRight) app->cursor = (app->cursor + 1) % 3;
+                if(key == InputKeyDown)  app->cursor = (app->cursor + 1) % 3;
+                if(key == InputKeyLeft)  app->cursor = (app->cursor + 2) % 3;
+            }
 
-            if(key == InputKeyOk) {
+            if(key == InputKeyOk && is_act) {
                 combat_player_action(app, app->cursor);
                 if(co->state == COMBAT_WIN) {
                     uint32_t shards = app->current_floor + 1;
@@ -1283,21 +1331,30 @@ static void app_input(InputEvent* event, void* context) {
                     game_save(app);
                     app->scene = SCENE_VICTORY;
                 } else if(co->state == COMBAT_LOSE) {
+                    app->has_active = false;
+                    memset(&app->active_phantom, 0, sizeof(Phantom));
+                    game_save(app);
                     app->scene = SCENE_DEFEAT;
                 }
-                /* If ENEMY_TURN, the tick timer advances enemy action */
             }
             break;
         }
         case SCENE_VICTORY:
         case SCENE_DEFEAT: {
-            if(key == InputKeyOk) app->scene = SCENE_MENU;
+            if(key == InputKeyOk && is_act) {
+                if(app->scene == SCENE_DEFEAT) {
+                    /* Phantom already wiped in combat loss handler */
+                }
+                app->scene = SCENE_MENU;
+            }
             break;
         }
         case SCENE_CAMP: {
-            if(key == InputKeyUp)   { if(app->cursor > 0) app->cursor--; }
-            if(key == InputKeyDown) { if(app->cursor < 2) app->cursor++; }
-            if(key == InputKeyOk) {
+            if(is_nav) {
+                if(key == InputKeyUp)   { if(app->cursor > 0) app->cursor--; }
+                if(key == InputKeyDown) { if(app->cursor < 2) app->cursor++; }
+            }
+            if(key == InputKeyOk && is_act) {
                 if(app->cursor == 0) {
                     if(!app->has_active) {
                         strncpy(app->message, "NO PHANTOM!", 32);
@@ -1313,13 +1370,15 @@ static void app_input(InputEvent* event, void* context) {
                 }
                 if(app->cursor == 2) app->scene = SCENE_MENU;
             }
-            if(key == InputKeyBack) app->scene = SCENE_MENU;
+            if(key == InputKeyBack && is_act) app->scene = SCENE_MENU;
             break;
         }
         case SCENE_UPGRADE: {
-            if(key == InputKeyUp)   { if(app->cursor > 0) app->cursor--; }
-            if(key == InputKeyDown) { if(app->cursor < 4) app->cursor++; }
-            if(key == InputKeyOk) {
+            if(is_nav) {
+                if(key == InputKeyUp)   { if(app->cursor > 0) app->cursor--; }
+                if(key == InputKeyDown) { if(app->cursor < 4) app->cursor++; }
+            }
+            if(key == InputKeyOk && is_act) {
                 if(app->cursor < 4) {
                     Phantom* p = &app->active_phantom;
                     uint8_t* ups[] = {&p->upgrades.hp, &p->upgrades.atk,
@@ -1337,34 +1396,43 @@ static void app_input(InputEvent* event, void* context) {
                     app->scene = SCENE_CAMP;
                 }
             }
-            if(key == InputKeyBack) app->scene = SCENE_CAMP;
+            if(key == InputKeyBack && is_act) app->scene = SCENE_CAMP;
             break;
         }
         case SCENE_COLLECTION: {
-            if(key == InputKeyUp || key == InputKeyLeft) {
-                if(app->collection_idx > 0) app->collection_idx--;
-            }
-            if(key == InputKeyDown || key == InputKeyRight) {
-                if(app->collection_idx < app->stored_count - 1) app->collection_idx++;
-            }
-            if(key == InputKeyOk && app->stored_count > 0) {
-                Phantom selected = app->stored[app->collection_idx];
-                if(app->has_active) {
-                    app->stored[app->collection_idx] = app->active_phantom;
-                } else {
-                    memmove(&app->stored[app->collection_idx],
-                            &app->stored[app->collection_idx + 1],
-                            (app->stored_count - app->collection_idx - 1) * sizeof(Phantom));
-                    app->stored_count--;
+            uint8_t total = app->stored_count + (app->has_active ? 1 : 0);
+            if(is_nav) {
+                if(key == InputKeyUp || key == InputKeyLeft) {
+                    if(app->collection_idx > 0) app->collection_idx--;
                 }
-                app->active_phantom = selected;
-                app->has_active = true;
-                game_save(app);
-                strncpy(app->message, "SET ACTIVE!", 32);
-                app->message_timer = 60;
-                app->scene = SCENE_CAMP;
+                if(key == InputKeyDown || key == InputKeyRight) {
+                    if(app->collection_idx + 1 < total) app->collection_idx++;
+                }
             }
-            if(key == InputKeyBack) app->scene = SCENE_CAMP;
+            if(key == InputKeyOk && is_act && total > 0) {
+                /* Selecting the active phantom is a no-op, just go back */
+                if(app->has_active && app->collection_idx == 0) {
+                    app->scene = SCENE_CAMP;
+                } else {
+                    uint8_t si = app->collection_idx - (app->has_active ? 1 : 0);
+                    Phantom selected = app->stored[si];
+                    if(app->has_active) {
+                        app->stored[si] = app->active_phantom;
+                    } else {
+                        memmove(&app->stored[si],
+                                &app->stored[si + 1],
+                                (app->stored_count - si - 1) * sizeof(Phantom));
+                        app->stored_count--;
+                    }
+                    app->active_phantom = selected;
+                    app->has_active = true;
+                    game_save(app);
+                    strncpy(app->message, "SET ACTIVE!", 32);
+                    app->message_timer = 60;
+                    app->scene = SCENE_CAMP;
+                }
+            }
+            if(key == InputKeyBack && is_act) app->scene = SCENE_CAMP;
             break;
         }
         default:
@@ -1413,6 +1481,9 @@ static void app_tick(void* context) {
                 game_save(app);
                 app->scene = SCENE_VICTORY;
             } else if(app->combat.state == COMBAT_LOSE) {
+                app->has_active = false;
+                memset(&app->active_phantom, 0, sizeof(Phantom));
+                game_save(app);
                 app->scene = SCENE_DEFEAT;
             }
         }
@@ -1427,7 +1498,7 @@ static void app_tick(void* context) {
     /* Summon reveal timer */
     if(app->scene == SCENE_SUMMON && app->summon_reveal) {
         app->reveal_timer++;
-        if(app->reveal_timer >= 25) {
+        if(app->reveal_timer >= 50) {
             app->summon_reveal = false;
         }
     }
