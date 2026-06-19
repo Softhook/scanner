@@ -1,0 +1,16 @@
+App(
+    appid="eye_of_the_phantom",
+    name="Eye of the Phantom",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="eye_phantom_app",
+    stack_size=4 * 1024,
+    requires=["gui", "infrared", "storage", "notification"],
+    fap_category="Games",
+    fap_description="IR/RF monster battler roguelite",
+    fap_author="scanner",
+    cdefines=["APP_VERSION=\"1.0\""],
+    sources=[
+        "eye_of_the_phantom.c",
+        "src/phantom_sprites.h",
+    ],
+)

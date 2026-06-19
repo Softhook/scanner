@@ -23,7 +23,8 @@
  * Total ROM: 12 parts × 32 bytes = 384 bytes
  */
 
-#pragma once
+#ifndef PHANTOM_SPRITES_H
+#define PHANTOM_SPRITES_H
 
 #include <stdint.h>
 #include <string.h>
@@ -495,3 +496,5 @@ static inline void phantom_sprite_indices_from_address(
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* PHANTOM_SPRITES_H */
