@@ -1,0 +1,1610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Eye of the Phantom — Flipper Zero PoC</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #080810;
+    color: #9bbc0f;
+    font-family: 'Share Tech Mono', monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 18px;
+    text-shadow: 0 0 12px #9bbc0f88;
+    color: #9bbc0f;
+  }
+
+  #device {
+    background: linear-gradient(145deg, #1a1a2e, #16162a);
+    border: 3px solid #f97316;
+    border-radius: 18px;
+    padding: 20px 24px;
+    box-shadow:
+      0 0 30px #f9731622,
+      inset 0 0 40px #00000080,
+      0 8px 32px #00000060;
+    position: relative;
+  }
+
+  #device::before {
+    content: '';
+    position: absolute;
+    top: 8px; left: 50%;
+    transform: translateX(-50%);
+    width: 60px; height: 3px;
+    background: #f97316;
+    border-radius: 2px;
+    opacity: 0.5;
+  }
+
+  #screen-frame {
+    background: #0f2a0f;
+    border: 2px solid #1a3a1a;
+    border-radius: 6px;
+    padding: 6px;
+    box-shadow: inset 0 0 20px #00000080;
+  }
+
+  canvas {
+    display: block;
+    width: 640px;
+    height: 320px;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border-radius: 2px;
+  }
+
+  #controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 40px;
+    margin-top: 24px;
+  }
+
+  .dpad {
+    display: grid;
+    grid-template-columns: 40px 40px 40px;
+    grid-template-rows: 40px 40px 40px;
+    gap: 2px;
+  }
+
+  .dpad-btn {
+    background: #222;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #888;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.1s;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .dpad-btn:hover { background: #333; color: #bbb; }
+  .dpad-btn:active, .dpad-btn.pressed {
+    background: #f97316;
+    color: #fff;
+    border-color: #fb923c;
+    box-shadow: 0 0 10px #f9731644;
+  }
+  .dpad-empty { background: transparent; border: none; }
+
+  .action-btns {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .action-btn {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: 2px solid #444;
+    background: #222;
+    color: #888;
+    font-size: 11px;
+    font-family: 'Share Tech Mono', monospace;
+    cursor: pointer;
+    transition: all 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .action-btn:hover { background: #333; color: #bbb; }
+  .action-btn.ok:active, .action-btn.ok.pressed {
+    background: #22c55e;
+    color: #fff;
+    border-color: #4ade80;
+    box-shadow: 0 0 12px #22c55e44;
+  }
+  .action-btn.back:active, .action-btn.back.pressed {
+    background: #ef4444;
+    color: #fff;
+    border-color: #f87171;
+    box-shadow: 0 0 12px #ef444444;
+  }
+
+  #legend {
+    margin-top: 20px;
+    font-size: 0.7rem;
+    color: #555;
+    text-align: center;
+    letter-spacing: 1px;
+  }
+
+  #legend span { color: #777; }
+</style>
+</head>
+<body>
+
+<h1>👁 Eye of the Phantom</h1>
+
+<div id="device">
+  <div id="screen-frame">
+    <canvas id="screen" width="128" height="64"></canvas>
+  </div>
+</div>
+
+<div id="controls">
+  <div class="dpad">
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" id="btn-up" data-key="up">▲</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" id="btn-left" data-key="left">◀</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" id="btn-right" data-key="right">▶</button>
+    <div class="dpad-empty"></div>
+    <button class="dpad-btn" id="btn-down" data-key="down">▼</button>
+    <div class="dpad-empty"></div>
+  </div>
+
+  <div class="action-btns">
+    <button class="action-btn ok" id="btn-ok" data-key="ok">OK</button>
+    <button class="action-btn back" id="btn-back" data-key="back">BACK</button>
+  </div>
+</div>
+
+<div id="legend">
+  <span>ARROWS</span> D-PAD &nbsp;|&nbsp; <span>ENTER</span> OK &nbsp;|&nbsp; <span>ESC</span> BACK
+</div>
+
+<script>
+// ============================================================
+// CONFIG
+// ============================================================
+const SCREEN_W = 128;
+const SCREEN_H = 64;
+const BG_COLOR = '#0f380f';
+const FG_COLOR = '#9bbc0f';
+const FG_DIM   = '#306230';
+
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+
+// ============================================================
+// BITMAP FONT (4px wide × 5px tall)
+// Each char: array of 5 rows, each row is 4 bits (MSB=left)
+// ============================================================
+const FONT = {
+  'A':[0x6,0x9,0x9,0xF,0x9],'B':[0xE,0x9,0xE,0x9,0xE],'C':[0x7,0x8,0x8,0x8,0x7],
+  'D':[0xE,0x9,0x9,0x9,0xE],'E':[0xF,0x8,0xE,0x8,0xF],'F':[0xF,0x8,0xE,0x8,0x8],
+  'G':[0x7,0x8,0xB,0x9,0x7],'H':[0x9,0x9,0xF,0x9,0x9],'I':[0xE,0x4,0x4,0x4,0xE],
+  'J':[0x7,0x1,0x1,0x9,0x6],'K':[0x9,0xA,0xC,0xA,0x9],'L':[0x8,0x8,0x8,0x8,0xF],
+  'M':[0x9,0xF,0xF,0x9,0x9],'N':[0x9,0xD,0xB,0x9,0x9],'O':[0x6,0x9,0x9,0x9,0x6],
+  'P':[0xE,0x9,0xE,0x8,0x8],'Q':[0x6,0x9,0x9,0xA,0x5],'R':[0xE,0x9,0xE,0xA,0x9],
+  'S':[0x7,0x8,0x6,0x1,0xE],'T':[0xF,0x4,0x4,0x4,0x4],'U':[0x9,0x9,0x9,0x9,0x6],
+  'V':[0x9,0x9,0x9,0x6,0x6],'W':[0x9,0x9,0xF,0xF,0x9],'X':[0x9,0x9,0x6,0x9,0x9],
+  'Y':[0x9,0x9,0x6,0x4,0x4],'Z':[0xF,0x1,0x6,0x8,0xF],
+  '0':[0x6,0x9,0x9,0x9,0x6],'1':[0x4,0xC,0x4,0x4,0xE],'2':[0x6,0x9,0x2,0x4,0xF],
+  '3':[0xE,0x1,0x6,0x1,0xE],'4':[0x9,0x9,0xF,0x1,0x1],'5':[0xF,0x8,0xE,0x1,0xE],
+  '6':[0x7,0x8,0xF,0x9,0x6],'7':[0xF,0x1,0x2,0x4,0x4],'8':[0x6,0x9,0x6,0x9,0x6],
+  '9':[0x6,0x9,0x7,0x1,0x6],
+  ' ':[0,0,0,0,0],'!':[0x4,0x4,0x4,0x0,0x4],'?':[0x6,0x9,0x2,0x0,0x2],
+  ':':[0x0,0x4,0x0,0x4,0x0],'.':[0,0,0,0,0x4],'-':[0,0,0xF,0,0],
+  '+':[0x0,0x4,0xE,0x4,0x0],'/':[0x1,0x2,0x4,0x8,0x0],'%':[0x9,0x1,0x6,0x8,0x9],
+  '#':[0xA,0xF,0xA,0xF,0xA],'>':[0x8,0x4,0x2,0x4,0x8],'<':[0x2,0x4,0x8,0x4,0x2],
+  '*':[0xA,0x4,0xE,0x4,0xA],'=':[0x0,0xF,0x0,0xF,0x0],'_':[0,0,0,0,0xF],
+  '(':[0x2,0x4,0x4,0x4,0x2],')':[0x4,0x2,0x2,0x2,0x4],',':[0,0,0,0x2,0x4],
+  '\'':[0x4,0x4,0,0,0], '"':[0xA,0xA,0,0,0], '~':[0,0x5,0xA,0,0],
+  'x':[0,0x9,0x6,0x6,0x9],
+};
+const FONT_W = 4;
+const FONT_H = 5;
+const CHAR_W = FONT_W + 1;
+const CHAR_H = FONT_H + 1;
+
+// ============================================================
+// SPRITE PARTS (16x16 modular creature sprites)
+// Each part is an array of rows; each row is a string of 16 chars (. = off, # = on)
+// Head: rows 0-5, Body: rows 4-10, Feet: rows 9-15
+// Parts are OR-composited to create the full 16x16 sprite
+// ============================================================
+
+const HEADS = [
+  // 0: Skull (round dome with eye sockets)
+  [
+    '................',
+    '....########....',
+    '...#........#...',
+    '..#..##..##..#..',
+    '..#..##..##..#..',
+    '...#...##...#...',
+  ],
+  // 1: Cyclops Eye (single large eye)
+  [
+    '................',
+    '.....######.....',
+    '...##......##...',
+    '..#...####...#..',
+    '..#..######..#..',
+    '...##..##..##...',
+  ],
+  // 2: Static/Glitch (noisy rectangle)
+  [
+    '................',
+    '..############..',
+    '..#.#.##.#.#.#..',
+    '..##.#..#.##.#..',
+    '..#.##.##.#..#..',
+    '..############..',
+  ],
+  // 3: Horned Crown (spiky top)
+  [
+    '.#...######...#.',
+    '.##.#......#.##.',
+    '..###......###..',
+    '...#..#..#..#...',
+    '...#..####..#...',
+    '...##########...',
+  ],
+];
+
+const BODIES = [
+  // 0: Slime (rounded amorphous blob)
+  [
+    '................',
+    '....########....',
+    '...##########...',
+    '..############..',
+    '...##########...',
+    '....########....',
+    '...##......##...',
+  ],
+  // 1: Mech (boxy mechanical)
+  [
+    '................',
+    '...##########...',
+    '...#..####..#...',
+    '...#.#....#.#...',
+    '...#..####..#...',
+    '...##########...',
+    '....#......#....',
+  ],
+  // 2: Beast (broad organic torso)
+  [
+    '................',
+    '..#..######..#..',
+    '..##.######.##..',
+    '...##########...',
+    '...##########...',
+    '....########....',
+    '....#......#....',
+  ],
+  // 3: Crystal (geometric diamond)
+  [
+    '................',
+    '......####......',
+    '.....##..##.....',
+    '....##....##....',
+    '.....##..##.....',
+    '......####......',
+    '.....#....#.....',
+  ],
+];
+
+const FEET = [
+  // 0: Claws (sharp pointed)
+  [
+    '................',
+    '....#......#....',
+    '...##......##...',
+    '..###......###..',
+    '.##.#......#.##.',
+    '#...#......#...#',
+    '................',
+  ],
+  // 1: Hover (floating with energy below)
+  [
+    '................',
+    '....########....',
+    '................',
+    '..#..#..#..#.#..',
+    '................',
+    '.#.#.#..#.#.#...',
+    '................',
+  ],
+  // 2: Tentacles (wavy tendrils)
+  [
+    '................',
+    '...#..#..#..#...',
+    '..#..#..#..#....',
+    '...#..#..#..#...',
+    '..#..#..#..#....',
+    '.#..#..#..#.....',
+    '................',
+  ],
+  // 3: Legs (simple bipedal)
+  [
+    '................',
+    '....##....##....',
+    '....##....##....',
+    '....##....##....',
+    '...##.....###...',
+    '...###....###...',
+    '................',
+  ],
+];
+
+// ============================================================
+// CLASS DEFINITIONS
+// ============================================================
+const CLASSES = ['BRAWLER','DEFENDER','TECHNICIAN','GLITCH'];
+const CLASS_COLORS = { BRAWLER: 1, DEFENDER: 1, TECHNICIAN: 1, GLITCH: 1 };
+const CLASS_STAT_BIAS = {
+  BRAWLER:    { hp: 1.1, atk: 1.4, def: 0.9, spd: 0.7 },
+  DEFENDER:   { hp: 1.3, atk: 0.7, def: 1.4, spd: 0.8 },
+  TECHNICIAN: { hp: 1.0, atk: 1.0, def: 1.0, spd: 1.1 },
+  GLITCH:     { hp: 0.7, atk: 1.3, def: 0.6, spd: 1.5 },
+};
+const PROTOCOLS = ['NEC','SONY','SAMSUNG','RC5'];
+
+// Name syllables for procedural naming
+const SYL1 = ['ZAR','NEX','VOL','KRI','PHA','DRE','MOX','SYN','VEX','LUR','GHO','TYR','BYT','NIX','ORC','HEX'];
+const SYL2 = ['TON','REX','IUS','ARA','BIT','ION','OID','ULK','ASH','IRE','ALT','ORB','INK','OSS','EEL','AMP'];
+
+// ============================================================
+// AUDIO ENGINE (Web Audio bleeps)
+// ============================================================
+let audioCtx = null;
+function initAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+function beep(freq, dur, vol = 0.08, type = 'square') {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  gain.gain.value = vol;
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + dur);
+}
+function sfxNavigate() { beep(800, 0.05); }
+function sfxSelect()   { beep(1200, 0.08); beep(1600, 0.08); }
+function sfxBack()     { beep(400, 0.08); }
+function sfxHit()      { beep(200, 0.1, 0.12); }
+function sfxCrit()     { beep(300, 0.06, 0.15); setTimeout(() => beep(600, 0.1, 0.15), 60); }
+function sfxHeal()     { beep(600, 0.1); setTimeout(() => beep(900, 0.15), 100); }
+function sfxScan()     { for(let i=0;i<5;i++) setTimeout(()=>beep(400+i*200,0.06,0.04),i*80); }
+function sfxVictory()  { [523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,0.15,0.1),i*120)); }
+function sfxDefeat()   { [400,300,200,100].forEach((f,i)=>setTimeout(()=>beep(f,0.2,0.1),i*150)); }
+
+// ============================================================
+// RENDERER
+// ============================================================
+const pixelBuffer = new Uint8Array(SCREEN_W * SCREEN_H);
+let screenShake = 0;
+let screenFlash = 0;
+
+function clearBuffer() { pixelBuffer.fill(0); }
+
+function setPixel(x, y, on = true) {
+  x = Math.floor(x); y = Math.floor(y);
+  if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H)
+    pixelBuffer[y * SCREEN_W + x] = on ? 1 : 0;
+}
+
+function getPixel(x, y) {
+  x = Math.floor(x); y = Math.floor(y);
+  if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H)
+    return pixelBuffer[y * SCREEN_W + x];
+  return 0;
+}
+
+function drawRect(x, y, w, h, fill = false) {
+  x=Math.floor(x); y=Math.floor(y); w=Math.floor(w); h=Math.floor(h);
+  if (fill) {
+    for (let py = y; py < y + h; py++)
+      for (let px = x; px < x + w; px++)
+        setPixel(px, py);
+  } else {
+    for (let px = x; px < x + w; px++) { setPixel(px, y); setPixel(px, y + h - 1); }
+    for (let py = y; py < y + h; py++) { setPixel(x, py); setPixel(x + w - 1, py); }
+  }
+}
+
+function drawLine(x0, y0, x1, y1) {
+  const dx = Math.abs(x1-x0), dy = Math.abs(y1-y0);
+  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+  while (true) {
+    setPixel(x0, y0);
+    if (x0 === x1 && y0 === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) { err -= dy; x0 += sx; }
+    if (e2 < dx)  { err += dx; y0 += sy; }
+  }
+}
+
+function drawCircle(cx, cy, r, fill = false) {
+  cx=Math.floor(cx); cy=Math.floor(cy); r=Math.floor(r);
+  if (fill) {
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx++)
+        if (dx*dx + dy*dy <= r*r) setPixel(cx+dx, cy+dy);
+  } else {
+    let x = r, y = 0, err = 1 - r;
+    while (x >= y) {
+      setPixel(cx+x,cy+y); setPixel(cx-x,cy+y);
+      setPixel(cx+x,cy-y); setPixel(cx-x,cy-y);
+      setPixel(cx+y,cy+x); setPixel(cx-y,cy+x);
+      setPixel(cx+y,cy-x); setPixel(cx-y,cy-x);
+      y++;
+      if (err < 0) err += 2*y+1;
+      else { x--; err += 2*(y-x)+1; }
+    }
+  }
+}
+
+function drawText(text, x, y, invert = false) {
+  const str = String(text).toUpperCase();
+  for (let i = 0; i < str.length; i++) {
+    const ch = FONT[str[i]];
+    if (!ch) { continue; }
+    const cx = x + i * CHAR_W;
+    for (let row = 0; row < FONT_H; row++) {
+      for (let col = 0; col < FONT_W; col++) {
+        const bit = (ch[row] >> (FONT_W - 1 - col)) & 1;
+        if (invert) {
+          setPixel(cx + col, y + row, !bit);
+        } else if (bit) {
+          setPixel(cx + col, y + row);
+        }
+      }
+    }
+    // Invert background
+    if (invert) {
+      for (let row = -1; row <= FONT_H; row++)
+        for (let col = -1; col < FONT_W + 1; col++) {
+          const px = cx+col, py = y+row;
+          if(col<0||col>=FONT_W||row<0||row>=FONT_H) setPixel(px,py,true);
+        }
+    }
+  }
+}
+
+function drawTextCentered(text, y, invert = false) {
+  const w = String(text).length * CHAR_W;
+  drawText(text, Math.floor((SCREEN_W - w) / 2), y, invert);
+}
+
+function drawHBar(x, y, w, h, ratio) {
+  ratio = Math.max(0, Math.min(1, ratio));
+  drawRect(x, y, w, h);
+  const fillW = Math.floor((w - 2) * ratio);
+  if (fillW > 0) drawRect(x + 1, y + 1, fillW, h - 2, true);
+}
+
+// Sprite compositor: combines head + body + feet into a 16x16 grid
+function compositeSprite(headIdx, bodyIdx, feetIdx) {
+  const grid = Array.from({length: 16}, () => Array(16).fill(0));
+  const parts = [
+    { data: HEADS[headIdx % HEADS.length], startRow: 0 },
+    { data: BODIES[bodyIdx % BODIES.length], startRow: 4 },
+    { data: FEET[feetIdx % FEET.length], startRow: 9 },
+  ];
+  for (const part of parts) {
+    for (let r = 0; r < part.data.length; r++) {
+      const row = part.startRow + r;
+      if (row >= 16) break;
+      const line = part.data[r];
+      for (let c = 0; c < 16 && c < line.length; c++) {
+        if (line[c] === '#') grid[row][c] = 1;
+      }
+    }
+  }
+  return grid;
+}
+
+function drawSprite(grid, x, y, invert = false) {
+  for (let r = 0; r < 16; r++)
+    for (let c = 0; c < 16; c++)
+      if (grid[r][c]) setPixel(x + c, y + r, !invert);
+      else if (invert) setPixel(x + c, y + r, true);
+}
+
+function flushBuffer() {
+  const imgData = ctx.createImageData(SCREEN_W, SCREEN_H);
+  const bgR = 15, bgG = 56, bgB = 15;
+  const fgR = 155, fgG = 188, fgB = 15;
+
+  if (screenFlash > 0) {
+    for (let i = 0; i < imgData.data.length; i += 4) {
+      imgData.data[i] = 255; imgData.data[i+1] = 255;
+      imgData.data[i+2] = 255; imgData.data[i+3] = 255;
+    }
+    screenFlash--;
+  } else {
+    for (let i = 0; i < pixelBuffer.length; i++) {
+      const idx = i * 4;
+      if (pixelBuffer[i]) {
+        imgData.data[idx] = fgR; imgData.data[idx+1] = fgG;
+        imgData.data[idx+2] = fgB; imgData.data[idx+3] = 255;
+      } else {
+        imgData.data[idx] = bgR; imgData.data[idx+1] = bgG;
+        imgData.data[idx+2] = bgB; imgData.data[idx+3] = 255;
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  if (screenShake > 0) {
+    const shakeX = (Math.random() - 0.5) * 4;
+    const shakeY = (Math.random() - 0.5) * 4;
+    canvas.style.transform = `translate(${shakeX}px, ${shakeY}px)`;
+    screenShake--;
+    if (screenShake === 0) canvas.style.transform = '';
+  }
+}
+
+// ============================================================
+// PHANTOM GENERATION
+// ============================================================
+function generatePhantom(protocol, address, command) {
+  const classIdx = PROTOCOLS.indexOf(protocol);
+  const cls = CLASSES[classIdx >= 0 ? classIdx : 3];
+  const bias = CLASS_STAT_BIAS[cls];
+
+  // Stat generation from command byte (0-255)
+  const seed = command & 0xFF;
+  const baseHP  = 30 + (seed % 20);
+  const baseATK = 8 + ((seed * 3 + 7) % 12);
+  const baseDEF = 6 + ((seed * 5 + 13) % 12);
+  const baseSPD = 5 + ((seed * 7 + 3) % 10);
+
+  const stats = {
+    hp:  Math.floor(baseHP * bias.hp),
+    atk: Math.floor(baseATK * bias.atk),
+    def: Math.floor(baseDEF * bias.def),
+    spd: Math.floor(baseSPD * bias.spd),
+  };
+
+  // Sprite from address
+  const addr = address & 0xFFFF;
+  const headIdx = addr & 0x3;
+  const bodyIdx = (addr >> 2) & 0x3;
+  const feetIdx = (addr >> 4) & 0x3;
+
+  // Name from data
+  const nameIdx1 = (addr + command) % SYL1.length;
+  const nameIdx2 = (command * 3 + addr) % SYL2.length;
+  const name = SYL1[nameIdx1] + SYL2[nameIdx2];
+
+  return {
+    name, cls, protocol,
+    address, command,
+    stats,
+    headIdx, bodyIdx, feetIdx,
+    sprite: compositeSprite(headIdx, bodyIdx, feetIdx),
+    isElite: false,
+    upgrades: { hp: 0, atk: 0, def: 0, spd: 0 },
+  };
+}
+
+function getEffectiveStats(phantom) {
+  return {
+    hp:  phantom.stats.hp + phantom.upgrades.hp * 3,
+    atk: phantom.stats.atk + phantom.upgrades.atk * 2,
+    def: phantom.stats.def + phantom.upgrades.def * 2,
+    spd: phantom.stats.spd + phantom.upgrades.spd * 1,
+  };
+}
+
+function generateEnemy(floor) {
+  // Seeded PRNG from floor number
+  let s = floor * 2654435761 >>> 0;
+  const next = () => { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return (s >>> 0); };
+
+  const proto = PROTOCOLS[next() % 4];
+  const addr = next() & 0x3F;
+  const cmd = next() & 0xFF;
+  const enemy = generatePhantom(proto, addr, cmd);
+  enemy.name = 'C-' + enemy.name;
+
+  // Scale stats with floor
+  const scale = 1 + floor * 0.12;
+  enemy.stats.hp  = Math.floor(enemy.stats.hp * scale);
+  enemy.stats.atk = Math.floor(enemy.stats.atk * scale);
+  enemy.stats.def = Math.floor(enemy.stats.def * scale);
+  enemy.stats.spd = Math.floor(enemy.stats.spd * scale);
+
+  return enemy;
+}
+
+// ============================================================
+// SAVE / LOAD
+// ============================================================
+function saveGame() {
+  const data = {
+    activePhantom: game.activePhantom,
+    stored: game.storedPhantoms,
+    shards: game.dataShards,
+    floor: game.currentFloor,
+    ver: 1,
+  };
+  try { localStorage.setItem('eotp_save', JSON.stringify(data)); } catch(e) {}
+}
+
+function loadGame() {
+  try {
+    const raw = localStorage.getItem('eotp_save');
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    game.activePhantom = data.activePhantom;
+    game.storedPhantoms = data.stored || [];
+    game.dataShards = data.shards || 0;
+    game.currentFloor = data.floor || 1;
+    // Rebuild sprites
+    if (game.activePhantom)
+      game.activePhantom.sprite = compositeSprite(game.activePhantom.headIdx, game.activePhantom.bodyIdx, game.activePhantom.feetIdx);
+    for (const p of game.storedPhantoms)
+      p.sprite = compositeSprite(p.headIdx, p.bodyIdx, p.feetIdx);
+    return true;
+  } catch(e) { return false; }
+}
+
+// ============================================================
+// GAME STATE
+// ============================================================
+const game = {
+  state: 'TITLE',
+  prevState: null,
+  activePhantom: null,
+  storedPhantoms: [],
+  dataShards: 0,
+  currentFloor: 1,
+  cursor: 0,
+  maxCursor: 0,
+  tick: 0,
+  subState: null,
+  // Combat state
+  combat: null,
+  // Scan state
+  scanTimer: 0,
+  pendingPhantom: null,
+  // Message
+  message: null,
+  messageTimer: 0,
+  // Collection scroll
+  collectionIdx: 0,
+  // Anim
+  combatAnim: null,
+  combatAnimTimer: 0,
+  combatLog: [],
+};
+
+function setState(newState) {
+  game.prevState = game.state;
+  game.state = newState;
+  game.cursor = 0;
+  game.subState = null;
+}
+
+function showMessage(msg, dur = 60) {
+  game.message = msg;
+  game.messageTimer = dur;
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+const keys = {};
+const keyJustPressed = {};
+
+function handleInput(key) {
+  initAudio();
+  if (keyJustPressed[key]) return;
+  keyJustPressed[key] = true;
+  keys[key] = true;
+
+  switch (game.state) {
+    case 'TITLE':    inputTitle(key); break;
+    case 'MENU':     inputMenu(key); break;
+    case 'SCAN':     inputScan(key); break;
+    case 'SUMMON':   inputSummon(key); break;
+    case 'PHANTOM':  inputPhantom(key); break;
+    case 'COMBAT':   inputCombat(key); break;
+    case 'VICTORY':  inputVictory(key); break;
+    case 'DEFEAT':   inputDefeat(key); break;
+    case 'CAMP':     inputCamp(key); break;
+    case 'COLLECTION': inputCollection(key); break;
+    case 'UPGRADE':  inputUpgrade(key); break;
+  }
+}
+
+function inputTitle(key) {
+  if (key === 'ok') {
+    sfxSelect();
+    loadGame();
+    setState('MENU');
+  }
+}
+
+function inputMenu(key) {
+  const items = ['SCAN', 'MY PHANTOM', 'DESCEND', 'CAMP'];
+  game.maxCursor = items.length - 1;
+  if (key === 'up') { game.cursor = Math.max(0, game.cursor - 1); sfxNavigate(); }
+  if (key === 'down') { game.cursor = Math.min(game.maxCursor, game.cursor + 1); sfxNavigate(); }
+  if (key === 'ok') {
+    sfxSelect();
+    switch (game.cursor) {
+      case 0: setState('SCAN'); game.scanTimer = 0; break;
+      case 1:
+        if (!game.activePhantom) { showMessage('NO PHANTOM YET!'); sfxBack(); }
+        else setState('PHANTOM');
+        break;
+      case 2:
+        if (!game.activePhantom) { showMessage('SCAN A PHANTOM FIRST!'); sfxBack(); }
+        else { setState('COMBAT'); startCombat(); }
+        break;
+      case 3: setState('CAMP'); break;
+    }
+  }
+}
+
+function inputScan(key) {
+  if (key === 'back') { sfxBack(); setState('MENU'); return; }
+  if (key === 'ok' && game.subState === null) {
+    sfxScan();
+    game.subState = 'SCANNING';
+    game.scanTimer = 0;
+  }
+}
+
+function inputSummon(key) {
+  if (game.subState === 'SHOW') {
+    game.maxCursor = 1;
+    if (key === 'left' || key === 'right') {
+      game.cursor = game.cursor === 0 ? 1 : 0;
+      sfxNavigate();
+    }
+    if (key === 'ok') {
+      sfxSelect();
+      if (game.cursor === 0) { // KEEP
+        if (game.activePhantom) {
+          if (game.storedPhantoms.length < 10) {
+            game.storedPhantoms.push(game.activePhantom);
+          } else {
+            // Replace oldest
+            game.storedPhantoms.shift();
+            game.storedPhantoms.push(game.activePhantom);
+          }
+        }
+        game.activePhantom = game.pendingPhantom;
+        saveGame();
+        showMessage('PHANTOM ACQUIRED!');
+      }
+      setState('MENU');
+    }
+    if (key === 'back') { sfxBack(); setState('MENU'); }
+  }
+}
+
+function inputPhantom(key) {
+  if (key === 'back') { sfxBack(); setState('MENU'); }
+}
+
+function inputCombat(key) {
+  if (!game.combat || game.combat.state !== 'PLAYER_TURN') return;
+  const actions = ['ATTACK','SKILL','DEFEND'];
+  game.maxCursor = actions.length - 1;
+  if (key === 'up')   { game.cursor = 0; sfxNavigate(); }
+  if (key === 'right'){ game.cursor = 1; sfxNavigate(); }
+  if (key === 'down') { game.cursor = 2; sfxNavigate(); }
+  if (key === 'ok') {
+    sfxSelect();
+    executeTurn(game.cursor);
+  }
+}
+
+function inputVictory(key) {
+  if (key === 'ok') { sfxSelect(); setState('MENU'); }
+}
+
+function inputDefeat(key) {
+  if (key === 'ok') { sfxSelect(); setState('MENU'); }
+}
+
+function inputCamp(key) {
+  const items = ['UPGRADE STATS','COLLECTION','BACK'];
+  game.maxCursor = items.length - 1;
+  if (key === 'up')   { game.cursor = Math.max(0, game.cursor - 1); sfxNavigate(); }
+  if (key === 'down') { game.cursor = Math.min(game.maxCursor, game.cursor + 1); sfxNavigate(); }
+  if (key === 'ok') {
+    sfxSelect();
+    if (game.cursor === 0) {
+      if (!game.activePhantom) { showMessage('NO PHANTOM!'); sfxBack(); }
+      else setState('UPGRADE');
+    }
+    if (game.cursor === 1) { setState('COLLECTION'); game.collectionIdx = 0; }
+    if (game.cursor === 2) setState('MENU');
+  }
+  if (key === 'back') { sfxBack(); setState('MENU'); }
+}
+
+function inputUpgrade(key) {
+  const stats = ['HP','ATK','DEF','SPD'];
+  game.maxCursor = stats.length;
+  if (key === 'up')   { game.cursor = Math.max(0, game.cursor - 1); sfxNavigate(); }
+  if (key === 'down') { game.cursor = Math.min(game.maxCursor, game.cursor + 1); sfxNavigate(); }
+  if (key === 'ok') {
+    if (game.cursor < 4) {
+      const cost = (game.activePhantom.upgrades[stats[game.cursor].toLowerCase()] + 1) * 3;
+      if (game.dataShards >= cost) {
+        game.dataShards -= cost;
+        game.activePhantom.upgrades[stats[game.cursor].toLowerCase()]++;
+        sfxHeal();
+        saveGame();
+      } else {
+        showMessage('NOT ENOUGH SHARDS!');
+        sfxBack();
+      }
+    } else {
+      sfxBack();
+      setState('CAMP');
+    }
+  }
+  if (key === 'back') { sfxBack(); setState('CAMP'); }
+}
+
+function inputCollection(key) {
+  const total = game.storedPhantoms.length;
+  if (key === 'up' || key === 'left') { game.collectionIdx = Math.max(0, game.collectionIdx - 1); sfxNavigate(); }
+  if (key === 'down' || key === 'right') { game.collectionIdx = Math.min(Math.max(0, total - 1), game.collectionIdx + 1); sfxNavigate(); }
+  if (key === 'ok' && total > 0) {
+    // Set as active
+    const selected = game.storedPhantoms[game.collectionIdx];
+    if (game.activePhantom) {
+      game.storedPhantoms[game.collectionIdx] = game.activePhantom;
+    } else {
+      game.storedPhantoms.splice(game.collectionIdx, 1);
+    }
+    game.activePhantom = selected;
+    sfxSelect();
+    showMessage('SET AS ACTIVE!');
+    saveGame();
+    setState('CAMP');
+  }
+  if (key === 'back') { sfxBack(); setState('CAMP'); }
+}
+
+// ============================================================
+// COMBAT ENGINE
+// ============================================================
+function startCombat() {
+  const enemy = generateEnemy(game.currentFloor);
+  const ps = getEffectiveStats(game.activePhantom);
+  const es = getEffectiveStats(enemy);
+  game.combat = {
+    player: { phantom: game.activePhantom, hp: ps.hp, maxHp: ps.hp, heat: 0, overloaded: false, stats: ps },
+    enemy:  { phantom: enemy, hp: es.hp, maxHp: es.hp, heat: 0, overloaded: false, stats: es },
+    state: 'PLAYER_TURN',
+    floor: game.currentFloor,
+    log: ['FLOOR ' + game.currentFloor + ' - FIGHT!'],
+  };
+  game.combatLog = game.combat.log;
+  game.cursor = 0;
+}
+
+function calcDamage(attacker, defender, isSkill) {
+  const atkStat = attacker.stats.atk;
+  const defStat = defender.stats.def;
+  let base = Math.max(1, atkStat - Math.floor(defStat / 2));
+  if (isSkill) base = Math.floor(base * 1.5);
+  // Crit check (SPD based, capped at 30%)
+  const critChance = Math.min(0.3, attacker.stats.spd * 0.02);
+  const isCrit = Math.random() < critChance;
+  if (isCrit) base = Math.floor(base * 1.8);
+  // Small random variance ±15%
+  const variance = 0.85 + Math.random() * 0.3;
+  return { damage: Math.max(1, Math.floor(base * variance)), isCrit };
+}
+
+function executeTurn(actionIdx) {
+  const c = game.combat;
+  if (c.state !== 'PLAYER_TURN') return;
+
+  // Player action
+  if (c.player.overloaded) {
+    c.log.push('YOU ARE OVERLOADED!');
+    c.player.overloaded = false;
+    c.player.heat = Math.max(0, c.player.heat - 50);
+  } else {
+    switch(actionIdx) {
+      case 0: { // Attack
+        const res = calcDamage(c.player, c.enemy, false);
+        c.enemy.hp -= res.damage;
+        c.player.heat += 20;
+        c.log.push('ATK: ' + res.damage + (res.isCrit ? ' CRIT!' : ''));
+        if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
+        break;
+      }
+      case 1: { // Skill
+        const res = calcDamage(c.player, c.enemy, true);
+        c.enemy.hp -= res.damage;
+        c.player.heat += 35;
+        c.log.push('SKILL: ' + res.damage + (res.isCrit ? ' CRIT!' : ''));
+        if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 6; sfxHit(); }
+        break;
+      }
+      case 2: { // Defend
+        c.player.heat = Math.max(0, c.player.heat - 30);
+        c.player.defending = true;
+        c.log.push('DEFEND! HEAT -30');
+        sfxHeal();
+        break;
+      }
+    }
+  }
+
+  // Check overload
+  if (c.player.heat >= 100) {
+    c.player.overloaded = true;
+    c.player.heat = 100;
+    const ovDmg = Math.floor(c.player.maxHp * 0.08);
+    c.player.hp -= ovDmg;
+    c.log.push('OVERLOAD! -' + ovDmg + ' HP');
+    screenShake = 8;
+  }
+
+  // Check enemy defeat
+  if (c.enemy.hp <= 0) {
+    c.enemy.hp = 0;
+    c.state = 'WIN';
+    const shards = game.currentFloor + 1;
+    game.dataShards += shards;
+    game.currentFloor++;
+    saveGame();
+    sfxVictory();
+    setTimeout(() => setState('VICTORY'), 800);
+    game.combat.shardReward = shards;
+    return;
+  }
+
+  // Enemy turn
+  setTimeout(() => enemyTurn(), 300);
+  c.state = 'ENEMY_TURN';
+}
+
+function enemyTurn() {
+  const c = game.combat;
+  if (c.state !== 'ENEMY_TURN') return;
+
+  if (c.enemy.overloaded) {
+    c.log.push('ENEMY OVERLOADED!');
+    c.enemy.overloaded = false;
+    c.enemy.heat = Math.max(0, c.enemy.heat - 50);
+  } else {
+    // AI: weighted random based on heat
+    let weights;
+    if (c.enemy.heat >= 80)      weights = [0.1, 0.0, 0.9];
+    else if (c.enemy.heat >= 50) weights = [0.3, 0.1, 0.6];
+    else                         weights = [0.7, 0.2, 0.1];
+
+    const roll = Math.random();
+    let action;
+    if (roll < weights[0]) action = 0;
+    else if (roll < weights[0] + weights[1]) action = 1;
+    else action = 2;
+
+    switch(action) {
+      case 0: { // Attack
+        let res = calcDamage(c.enemy, c.player, false);
+        let dmg = res.damage;
+        if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
+        c.player.hp -= dmg;
+        c.enemy.heat += 20;
+        c.log.push('FOE ATK: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
+        if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
+        break;
+      }
+      case 1: { // Skill
+        let res = calcDamage(c.enemy, c.player, true);
+        let dmg = res.damage;
+        if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
+        c.player.hp -= dmg;
+        c.enemy.heat += 35;
+        c.log.push('FOE SKILL: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
+        screenShake = 6; sfxHit();
+        break;
+      }
+      case 2: { // Defend
+        c.enemy.heat = Math.max(0, c.enemy.heat - 30);
+        c.enemy.defending = true;
+        c.log.push('FOE DEFENDS');
+        break;
+      }
+    }
+  }
+
+  // Check enemy overload
+  if (c.enemy.heat >= 100) {
+    c.enemy.overloaded = true;
+    c.enemy.heat = 100;
+    const ovDmg = Math.floor(c.enemy.maxHp * 0.08);
+    c.enemy.hp -= ovDmg;
+    c.log.push('FOE OVERLOAD! -' + ovDmg);
+  }
+
+  // Check player defeat
+  if (c.player.hp <= 0) {
+    c.player.hp = 0;
+    c.state = 'LOSE';
+    sfxDefeat();
+    setTimeout(() => setState('DEFEAT'), 800);
+    return;
+  }
+
+  c.state = 'PLAYER_TURN';
+  c.player.defending = false;
+}
+
+// ============================================================
+// SCREEN RENDERERS
+// ============================================================
+
+function renderTitle() {
+  clearBuffer();
+  const t = game.tick;
+
+  // Draw eye logo
+  const cx = 64, cy = 20;
+  drawCircle(cx, cy, 12);
+  drawCircle(cx, cy, 10);
+  drawCircle(cx, cy, 5, true);
+  // Pupil animation
+  const px = cx + Math.floor(Math.sin(t * 0.05) * 3);
+  const py = cy + Math.floor(Math.cos(t * 0.07) * 2);
+  drawCircle(px, py, 2, true);
+
+  // Eyelid blink every ~3s
+  if ((t % 90) < 5) {
+    for (let dy = -12; dy <= 0; dy++)
+      for (let dx = -12; dx <= 12; dx++)
+        if (dx*dx+dy*dy <= 144) setPixel(cx+dx, cy+dy, false);
+  }
+
+  drawTextCentered('EYE OF THE', 36);
+  drawTextCentered('PHANTOM', 44);
+
+  if (Math.floor(t / 20) % 2 === 0)
+    drawTextCentered('PRESS OK', 56);
+
+  flushBuffer();
+}
+
+function renderMenu() {
+  clearBuffer();
+  const items = ['SCAN','MY PHANTOM','DESCEND','CAMP'];
+  drawText('MENU', 2, 2);
+  drawLine(0, 9, 127, 9);
+
+  // Show shards
+  drawText('$' + game.dataShards, 80, 2);
+  // Show floor
+  drawText('F' + game.currentFloor, 108, 2);
+
+  for (let i = 0; i < items.length; i++) {
+    const y = 14 + i * 12;
+    if (i === game.cursor) {
+      drawRect(0, y - 1, 128, 11, true);
+      drawText(items[i], 12, y, true);
+      // Arrow
+      drawText('>', 3, y, true);
+    } else {
+      drawText(items[i], 12, y);
+    }
+  }
+
+  if (game.message && game.messageTimer > 0) renderMessageOverlay();
+  flushBuffer();
+}
+
+function renderScan() {
+  clearBuffer();
+
+  if (game.subState === null) {
+    drawTextCentered('INFRARED SCAN', 4);
+    drawLine(0, 12, 127, 12);
+
+    // Draw IR receiver icon
+    const cx = 64, cy = 34;
+    drawCircle(cx, cy, 8);
+    drawCircle(cx, cy, 4, true);
+
+    drawTextCentered('POINT REMOTE', 48);
+    drawTextCentered('PRESS OK TO SCAN', 56);
+  }
+  else if (game.subState === 'SCANNING') {
+    game.scanTimer++;
+    drawTextCentered('SCANNING...', 4);
+
+    // Animated concentric circles
+    const cx = 64, cy = 32;
+    const phase = game.scanTimer;
+    for (let r = 1; r < 4; r++) {
+      const radius = ((phase * 2 + r * 8) % 28) + 2;
+      if (radius < 25) drawCircle(cx, cy, radius);
+    }
+
+    // "Signal detected" after delay
+    if (game.scanTimer > 40) {
+      // Generate random IR data
+      const proto = PROTOCOLS[Math.floor(Math.random() * 4)];
+      const addr = Math.floor(Math.random() * 256);
+      const cmd = Math.floor(Math.random() * 256);
+
+      game.pendingPhantom = generatePhantom(proto, addr, cmd);
+      game.subState = null;
+      setState('SUMMON');
+      game.subState = 'REVEAL';
+      game.scanTimer = 0;
+    }
+  }
+
+  flushBuffer();
+}
+
+function renderSummon() {
+  clearBuffer();
+  const p = game.pendingPhantom;
+  if (!p) { flushBuffer(); return; }
+
+  if (game.subState === 'REVEAL') {
+    game.scanTimer++;
+    // Reveal animation: static noise clearing to show phantom
+    if (game.scanTimer < 25) {
+      const progress = game.scanTimer / 25;
+      // Draw noise that gradually clears
+      for (let y = 0; y < 64; y++) {
+        for (let x = 0; x < 128; x++) {
+          if (Math.random() > progress * 0.7)
+            setPixel(x, y, Math.random() > 0.5);
+        }
+      }
+      drawTextCentered('SIGNAL FOUND!', 28);
+    } else {
+      game.subState = 'SHOW';
+      game.cursor = 0;
+    }
+    flushBuffer();
+    return;
+  }
+
+  // Full phantom display
+  drawText('SUMMONED!', 2, 2);
+  drawLine(0, 9, 127, 9);
+
+  // Sprite (left side)
+  drawSprite(p.sprite, 4, 13);
+  // Elite glow
+  if (p.isElite) drawRect(2, 11, 20, 20);
+
+  // Info (right side)
+  drawText(p.name, 26, 13);
+  drawText(p.cls, 26, 21);
+
+  const es = p.stats;
+  drawText('HP ' + es.hp, 26, 31);
+  drawText('ATK' + es.atk, 70, 31);
+  drawText('DEF' + es.def, 26, 39);
+  drawText('SPD' + es.spd, 70, 39);
+
+  // Protocol info
+  drawText(p.protocol + ' ' + p.address.toString(16).toUpperCase() + ':' + p.command.toString(16).toUpperCase(), 2, 48);
+
+  // Keep / Discard
+  if (game.cursor === 0) {
+    drawRect(2, 56, 58, 8, true);
+    drawText('KEEP', 6, 57, true);
+    drawText('DISCARD', 68, 57);
+  } else {
+    drawText('KEEP', 6, 57);
+    drawRect(62, 56, 60, 8, true);
+    drawText('DISCARD', 68, 57, true);
+  }
+
+  flushBuffer();
+}
+
+function renderPhantom() {
+  clearBuffer();
+  const p = game.activePhantom;
+  if (!p) { drawTextCentered('NO PHANTOM', 28); flushBuffer(); return; }
+
+  drawText(p.name, 2, 2);
+  drawLine(0, 9, 127, 9);
+
+  drawSprite(p.sprite, 4, 14);
+
+  drawText(p.cls, 26, 14);
+
+  const es = getEffectiveStats(p);
+  drawText('HP  ' + es.hp, 26, 24);
+  drawText('ATK ' + es.atk, 26, 32);
+  drawText('DEF ' + es.def, 76, 24);
+  drawText('SPD ' + es.spd, 76, 32);
+
+  // Upgrades
+  if (p.upgrades.hp || p.upgrades.atk || p.upgrades.def || p.upgrades.spd) {
+    drawText('+' + p.upgrades.hp + ' +' + p.upgrades.atk + ' +' + p.upgrades.def + ' +' + p.upgrades.spd, 26, 42);
+  }
+
+  drawText(p.protocol, 2, 56);
+  drawText('BACK', 100, 56);
+
+  flushBuffer();
+}
+
+function renderCombat() {
+  clearBuffer();
+  const c = game.combat;
+  if (!c) { flushBuffer(); return; }
+
+  // === TOP: HP Bars (rows 0-11) ===
+  // Player HP bar
+  drawText('YOU', 1, 1);
+  drawHBar(20, 1, 42, 5, c.player.hp / c.player.maxHp);
+  // Enemy HP bar
+  drawText('FOE', 68, 1);
+  drawHBar(88, 1, 38, 5, c.enemy.hp / c.enemy.maxHp);
+
+  // Heat bars (thin, below HP)
+  drawText('H', 1, 8);
+  drawHBar(8, 8, 54, 4, c.player.heat / 100);
+  drawText('H', 68, 8);
+  drawHBar(76, 8, 50, 4, c.enemy.heat / 100);
+
+  drawLine(0, 13, 127, 13);
+
+  // === MIDDLE: Sprites (rows 14-45) ===
+  const playerSpriteY = 18;
+  const enemySpriteY = 18;
+
+  // Player sprite (left)
+  const pShakeX = (c.state === 'ENEMY_TURN' || c.player.overloaded) ? Math.floor(Math.random()*2) : 0;
+  drawSprite(c.player.phantom.sprite, 8 + pShakeX, playerSpriteY, c.player.overloaded && game.tick % 6 < 3);
+
+  // Enemy sprite (right) - mirrored feel
+  const eShakeX = (c.state === 'PLAYER_TURN' && game.tick % 3 === 0 && screenShake > 0) ? 1 : 0;
+  drawSprite(c.enemy.phantom.sprite, 104 + eShakeX, enemySpriteY, c.enemy.overloaded && game.tick % 6 < 3);
+
+  // HP numbers
+  drawText(c.player.hp + '/' + c.player.maxHp, 4, 36);
+  drawText(c.enemy.hp + '/' + c.enemy.maxHp, 96, 36);
+
+  // VS divider
+  drawText('VS', 58, 24);
+
+  // === Combat log line ===
+  drawLine(0, 42, 127, 42);
+  if (c.log.length > 0) {
+    const lastLog = c.log[c.log.length - 1];
+    drawText(lastLog.substring(0, 25), 2, 44);
+  }
+
+  // === BOTTOM: Action menu (rows 50-63) ===
+  drawLine(0, 50, 127, 50);
+
+  if (c.state === 'PLAYER_TURN') {
+    const actions = ['ATTACK', 'SKILL', 'DEFEND'];
+    const positions = [
+      { x: 2, y: 53, label: 'UP:ATK' },
+      { x: 46, y: 53, label: 'RT:SKL' },
+      { x: 86, y: 53, label: 'DN:DEF' },
+    ];
+    for (let i = 0; i < 3; i++) {
+      if (i === game.cursor) {
+        const w = positions[i].label.length * CHAR_W + 4;
+        drawRect(positions[i].x - 1, positions[i].y - 1, w, CHAR_H + 3, true);
+        drawText(positions[i].label, positions[i].x + 1, positions[i].y, true);
+      } else {
+        drawText(positions[i].label, positions[i].x + 1, positions[i].y);
+      }
+    }
+
+    // Heat warning
+    if (c.player.heat >= 70 && game.tick % 20 < 10) {
+      drawText('!HOT!', 48, 58);
+    }
+  } else if (c.state === 'ENEMY_TURN') {
+    drawTextCentered('ENEMY TURN...', 55);
+  } else if (c.state === 'WIN') {
+    drawTextCentered('VICTORY!', 55);
+  } else if (c.state === 'LOSE') {
+    drawTextCentered('DEFEATED...', 55);
+  }
+
+  flushBuffer();
+}
+
+function renderVictory() {
+  clearBuffer();
+  const t = game.tick;
+
+  drawTextCentered('VICTORY!', 4);
+  drawLine(0, 12, 127, 12);
+
+  // Sprite celebration
+  if (game.activePhantom) {
+    const bounceY = Math.floor(Math.sin(t * 0.15) * 3);
+    drawSprite(game.activePhantom.sprite, 56, 16 + bounceY);
+  }
+
+  const shards = game.combat ? game.combat.shardReward : 0;
+  drawTextCentered('FLOOR ' + (game.currentFloor - 1) + ' CLEARED!', 36);
+  drawTextCentered('+' + shards + ' DATA SHARDS', 44);
+  drawTextCentered('TOTAL: ' + game.dataShards, 52);
+
+  if (Math.floor(t / 20) % 2 === 0)
+    drawTextCentered('PRESS OK', 58);
+
+  flushBuffer();
+}
+
+function renderDefeat() {
+  clearBuffer();
+  const t = game.tick;
+
+  drawTextCentered('DEFEATED', 8);
+  drawLine(0, 16, 127, 16);
+
+  // Glitchy phantom
+  if (game.activePhantom) {
+    for (let y = 0; y < 16; y++)
+      for (let x = 0; x < 16; x++)
+        if (game.activePhantom.sprite[y][x] && Math.random() > 0.3)
+          setPixel(56 + x, 22 + y);
+  }
+
+  drawTextCentered('YOUR PHANTOM', 42);
+  drawTextCentered('WAS CORRUPTED', 50);
+
+  if (Math.floor(t / 20) % 2 === 0)
+    drawTextCentered('PRESS OK', 58);
+
+  flushBuffer();
+}
+
+function renderCamp() {
+  clearBuffer();
+  const items = ['UPGRADE STATS','COLLECTION','BACK'];
+  drawText('CAMP', 2, 2);
+  drawText('$' + game.dataShards, 80, 2);
+  drawLine(0, 9, 127, 9);
+
+  for (let i = 0; i < items.length; i++) {
+    const y = 14 + i * 12;
+    if (i === game.cursor) {
+      drawRect(0, y - 1, 128, 11, true);
+      drawText(items[i], 12, y, true);
+      drawText('>', 3, y, true);
+    } else {
+      drawText(items[i], 12, y);
+    }
+  }
+
+  if (game.message && game.messageTimer > 0) renderMessageOverlay();
+  flushBuffer();
+}
+
+function renderUpgrade() {
+  clearBuffer();
+  const p = game.activePhantom;
+  if (!p) { flushBuffer(); return; }
+
+  drawText('UPGRADE', 2, 2);
+  drawText('$' + game.dataShards, 80, 2);
+  drawLine(0, 9, 127, 9);
+
+  const stats = ['HP','ATK','DEF','SPD'];
+  const es = getEffectiveStats(p);
+  const vals = [es.hp, es.atk, es.def, es.spd];
+
+  for (let i = 0; i < 4; i++) {
+    const y = 14 + i * 10;
+    const cost = (p.upgrades[stats[i].toLowerCase()] + 1) * 3;
+    const label = stats[i] + ' ' + vals[i] + ' +' + p.upgrades[stats[i].toLowerCase()] + ' ($' + cost + ')';
+    if (i === game.cursor) {
+      drawRect(0, y - 1, 128, 9, true);
+      drawText(label, 4, y, true);
+    } else {
+      drawText(label, 4, y);
+    }
+  }
+
+  // Back option
+  const backY = 54;
+  if (game.cursor === 4) {
+    drawRect(0, backY - 1, 128, 9, true);
+    drawText('BACK', 4, backY, true);
+  } else {
+    drawText('BACK', 4, backY);
+  }
+
+  if (game.message && game.messageTimer > 0) renderMessageOverlay();
+  flushBuffer();
+}
+
+function renderCollection() {
+  clearBuffer();
+  const list = game.storedPhantoms;
+
+  drawText('COLLECTION', 2, 2);
+  drawText(list.length + '/10', 90, 2);
+  drawLine(0, 9, 127, 9);
+
+  if (list.length === 0) {
+    drawTextCentered('EMPTY', 28);
+    drawTextCentered('SCAN PHANTOMS FIRST', 38);
+  } else {
+    const p = list[game.collectionIdx];
+    // Sprite
+    drawSprite(p.sprite, 4, 14);
+
+    // Info
+    drawText(p.name, 26, 14);
+    drawText(p.cls, 26, 22);
+    const ps = getEffectiveStats(p);
+    drawText('HP' + ps.hp + ' A' + ps.atk, 26, 32);
+    drawText('D' + ps.def + ' S' + ps.spd, 26, 40);
+
+    // Navigation
+    drawText((game.collectionIdx+1) + '/' + list.length, 2, 56);
+    drawText('OK=SET ACTIVE', 44, 56);
+  }
+
+  flushBuffer();
+}
+
+function renderMessageOverlay() {
+  if (!game.message) return;
+  const msg = game.message;
+  const w = msg.length * CHAR_W + 8;
+  const x = Math.floor((SCREEN_W - w) / 2);
+  const y = 24;
+
+  // Clear area
+  for (let py = y; py < y + 14; py++)
+    for (let px = x - 2; px < x + w + 2; px++)
+      setPixel(px, py, false);
+
+  drawRect(x - 2, y, w + 4, 14);
+  drawRect(x - 1, y + 1, w + 2, 12);
+  drawText(msg, x + 4, y + 4);
+}
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
+function render() {
+  switch (game.state) {
+    case 'TITLE':      renderTitle(); break;
+    case 'MENU':       renderMenu(); break;
+    case 'SCAN':       renderScan(); break;
+    case 'SUMMON':     renderSummon(); break;
+    case 'PHANTOM':    renderPhantom(); break;
+    case 'COMBAT':     renderCombat(); break;
+    case 'VICTORY':    renderVictory(); break;
+    case 'DEFEAT':     renderDefeat(); break;
+    case 'CAMP':       renderCamp(); break;
+    case 'UPGRADE':    renderUpgrade(); break;
+    case 'COLLECTION': renderCollection(); break;
+  }
+
+  // Tick message timer
+  if (game.messageTimer > 0) {
+    game.messageTimer--;
+    if (game.messageTimer <= 0) game.message = null;
+  }
+}
+
+function gameLoop() {
+  game.tick++;
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ============================================================
+// INPUT BINDINGS
+// ============================================================
+const KEY_MAP = {
+  'ArrowUp': 'up', 'ArrowDown': 'down', 'ArrowLeft': 'left', 'ArrowRight': 'right',
+  'Enter': 'ok', 'Escape': 'back', ' ': 'ok',
+  'w': 'up', 's': 'down', 'a': 'left', 'd': 'right',
+};
+
+document.addEventListener('keydown', (e) => {
+  const key = KEY_MAP[e.key];
+  if (key) {
+    e.preventDefault();
+    handleInput(key);
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  const key = KEY_MAP[e.key];
+  if (key) {
+    keys[key] = false;
+    keyJustPressed[key] = false;
+  }
+});
+
+// On-screen button bindings
+document.querySelectorAll('.dpad-btn, .action-btn').forEach(btn => {
+  const key = btn.dataset.key;
+  if (!key) return;
+
+  const press = (e) => {
+    e.preventDefault();
+    btn.classList.add('pressed');
+    handleInput(key);
+  };
+  const release = (e) => {
+    e.preventDefault();
+    btn.classList.remove('pressed');
+    keys[key] = false;
+    keyJustPressed[key] = false;
+  };
+
+  btn.addEventListener('mousedown', press);
+  btn.addEventListener('mouseup', release);
+  btn.addEventListener('mouseleave', release);
+  btn.addEventListener('touchstart', press, { passive: false });
+  btn.addEventListener('touchend', release, { passive: false });
+});
+
+// ============================================================
+// START
+// ============================================================
+gameLoop();
+</script>
+</body>
+</html>
