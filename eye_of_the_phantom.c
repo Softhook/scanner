@@ -19,6 +19,10 @@
 #include <storage/storage.h>
 #include <infrared.h>
 #include <infrared_worker.h>
+#include <nfc/nfc.h>
+#include <nfc/nfc_device.h>
+#include <nfc/nfc_poller.h>
+#include <nfc/protocols/iso14443_3a/iso14443_3a_poller.h>
 #include <math.h>
 
 #include "src/phantom_sprites.h"
@@ -72,7 +76,8 @@ typedef enum {
     PROTO_NEC,
     PROTO_SONY,
     PROTO_SAMSUNG,
-    PROTO_RC5
+    PROTO_RC5,
+    PROTO_NFC
 } SignalProtocol;
 
 typedef enum {
@@ -152,6 +157,11 @@ typedef struct {
     InfraredWorker*   ir_worker;
     bool              ir_running;
     bool              ir_done;       /* signal captured, needs processing */
+    Nfc*              nfc;
+    NfcDevice*        nfc_device;
+    NfcPoller*        nfc_poller;
+    bool              nfc_running;
+    bool              nfc_done;      /* NFC tag detected, needs processing */
     uint16_t          scan_timer;    /* timeout counter */
     Scene       scene;
     Phantom     pending_phantom;
@@ -185,7 +195,7 @@ typedef struct {
  * ================================================================ */
 
 static const char* CLASS_NAMES[] = {"BRAWLER","DEFENDER","GLITCH"};
-static const char* PROTO_NAMES[] = {"NEC","SONY","SAMSUNG","RC5"};
+static const char* PROTO_NAMES[] = {"NEC","SONY","SAMSUNG","RC5","NFC"};
 
 static const struct { float hp, atk, def, spd; } CLASS_BIAS[] = {
     {1.2, 1.5, 0.8, 0.7},  /* BRAWLER   */
@@ -238,6 +248,7 @@ static void phantom_generate(Phantom* p, SignalProtocol proto,
         case PROTO_NEC:     cls = CLASS_BRAWLER;  break;
         case PROTO_SONY:    cls = CLASS_DEFENDER;  break;
         case PROTO_SAMSUNG: cls = CLASS_GLITCH;    break;
+        case PROTO_NFC:     cls = (PhantomClass)((address + command) % 3); break;
         default:            cls = (PhantomClass)((address + command) % 3); break;
     }
 
@@ -880,6 +891,89 @@ static void scan_ir_stop(EyePhantomApp* app) {
 }
 
 /* ================================================================
+ * NFC SCAN
+ * ================================================================ */
+
+static NfcCommand nfc_poller_callback(NfcGenericEvent event, void* context) {
+    EyePhantomApp* app = (EyePhantomApp*)context;
+
+    if(event.protocol != NfcProtocolIso14443_3a) return NfcCommandContinue;
+    if(!app->nfc_running || app->nfc_done) return NfcCommandStop;
+
+    const Iso14443_3aPollerEvent* iso3_event = event.event_data;
+    if(iso3_event->type != Iso14443_3aPollerEventTypeReady)
+        return NfcCommandContinue;
+
+    /* Card activated — copy data to device and extract UID */
+    nfc_device_set_data(
+        app->nfc_device, NfcProtocolIso14443_3a,
+        nfc_poller_get_data(app->nfc_poller));
+
+    size_t uid_len = 0;
+    const uint8_t* uid = nfc_device_get_uid(app->nfc_device, &uid_len);
+    if(uid_len == 0) return NfcCommandContinue;
+
+    /* Build address using FNV-1a hash over all UID bytes.
+     * This gives a well-distributed 32-bit value where every byte
+     * of the UID contributes — no truncation, strong avalanche. */
+    uint32_t addr = 0x811C9DC5; /* FNV-1a offset basis */
+    for(size_t i = 0; i < uid_len; i++) {
+        addr ^= uid[i];
+        addr *= 0x01000193;      /* FNV-1a prime */
+    }
+
+    /* Build command from reversed UID using rotate-mix for
+     * orthogonal variation from the address — ensures addr and
+     * cmd are meaningfully different even for short UIDs. */
+    uint32_t cmd = 0;
+    for(size_t i = 0; i < uid_len; i++) {
+        cmd ^= (uint32_t)uid[uid_len - 1 - i] << ((i % 4) * 8);
+    }
+    /* Mix thoroughly so every input byte affects the output byte
+     * that phantom_generate will use as seed (command & 0xFF) */
+    cmd ^= cmd >> 16;
+    cmd *= 0x45D9F3B;
+    cmd ^= cmd >> 16;
+
+    phantom_generate(&app->pending_phantom, PROTO_NFC, addr, cmd);
+    app->nfc_done = true;
+    return NfcCommandStop;
+}
+
+static void scan_nfc_start(EyePhantomApp* app) {
+    if(!app->nfc) return;
+    if(app->nfc_running) {
+        nfc_poller_stop(app->nfc_poller);
+        nfc_poller_free(app->nfc_poller);
+        app->nfc_poller = NULL;
+        app->nfc_running = false;
+    }
+    app->nfc_done = false;
+
+    /* Create poller for ISO14443-3A (covers Mifare, DESFire, NTAG, etc.) */
+    app->nfc_poller = nfc_poller_alloc(app->nfc, NfcProtocolIso14443_3a);
+    nfc_poller_start(app->nfc_poller, nfc_poller_callback, app);
+    app->nfc_running = true;
+}
+
+static void scan_nfc_stop(EyePhantomApp* app) {
+    if(!app->nfc_running || !app->nfc_poller) return;
+    nfc_poller_stop(app->nfc_poller);
+    nfc_poller_free(app->nfc_poller);
+    app->nfc_poller = NULL;
+    app->nfc_running = false;
+}
+
+static bool scan_is_any_active(EyePhantomApp* app) {
+    return app->ir_running || app->nfc_running;
+}
+
+static void scan_stop_all(EyePhantomApp* app) {
+    if(app->ir_running) scan_ir_stop(app);
+    if(app->nfc_running) scan_nfc_stop(app);
+}
+
+/* ================================================================
  * RENDERING HELPERS
  * ================================================================ */
 
@@ -1038,21 +1132,81 @@ static void render_menu(Canvas* c, EyePhantomApp* app) {
 static void render_scan(Canvas* c, EyePhantomApp* app) {
     canvas_clear(c);
     uint32_t t = app->tick;
+    bool scanning = scan_is_any_active(app);
 
-    if(app->ir_running) {
-        draw_str_centered(c, "IR SCANNING...", 4);
-        int cx = 64, cy = 32;
-        for(int r = 1; r < 4; r++) {
-            int radius = ((t + r * 16) % 56) + 2;
-            if(radius < 25) canvas_draw_circle(c, cx, cy, radius);
+    if(scanning) {
+        draw_str_centered(c, "SCANNING...", 3);
+
+        /* --- Left: IR radar circles --- */
+        if(app->ir_running) {
+            int cx = 32, cy = 34;
+            for(int r = 1; r < 3; r++) {
+                int radius = ((t + r * 20) % 44) + 4;
+                if(radius < 22) canvas_draw_circle(c, cx, cy, radius);
+            }
+            draw_str(c, "IR", 10, 54);
+        } else {
+            draw_str(c, "IR", 10, 54);
+            canvas_draw_line(c, 22, 40, 42, 28);
+        }
+
+        /* --- Right: NFC card detection indicator --- */
+        if(app->nfc_running) {
+            int cx = 96, cy = 34;
+            /* Card outline */
+            int card_w = 16, card_h = 22;
+            int card_x = cx - card_w / 2;
+            int card_y = cy - card_h / 2;
+            canvas_draw_frame(c, card_x, card_y, card_w, card_h);
+
+            /* Pulsing glow — expanding frame */
+            int pulse_off = ((t * 2) % 12);
+            if(pulse_off < 8) {
+                canvas_draw_frame(c, card_x - 1 - pulse_off, card_y - 1 - pulse_off,
+                                  card_w + 2 + pulse_off * 2, card_h + 2 + pulse_off * 2);
+            }
+
+            /* Inner chip lines */
+            canvas_draw_line(c, card_x + 4, card_y + 4, card_x + 8, card_y + 8);
+            canvas_draw_line(c, card_x + 4, card_y + 8, card_x + 8, card_y + 4);
+            canvas_draw_disc(c, cx, cy, 2);
+
+            draw_str(c, "NFC", 78, 54);
+        } else {
+            draw_str(c, "NFC", 78, 54);
+            /* Static card icon */
+            int cx = 96, cy = 34;
+            int card_w = 16, card_h = 22;
+            canvas_draw_frame(c, cx - card_w / 2, cy - card_h / 2, card_w, card_h);
+        }
+
+        /* Active indicator at bottom */
+        if(app->ir_running && app->nfc_running) {
+            draw_str_centered(c, "IR + NFC ACTIVE", 59);
+        } else if(app->ir_running) {
+            draw_str_centered(c, "IR ACTIVE", 59);
+        } else {
+            draw_str_centered(c, "NFC ACTIVE", 59);
         }
     } else {
-        draw_str_centered(c, "INFRARED SCAN", 4);
+        draw_str_centered(c, "IR & NFC SCAN", 4);
         canvas_draw_line(c, 0, 12, 127, 12);
-        canvas_draw_circle(c, 64, 34, 8);
-        canvas_draw_disc(c, 64, 34, 4);
-        draw_str_centered(c, "POINT REMOTE", 48);
-        draw_str_centered(c, "PRESS OK TO SCAN", 56);
+
+        /* IR icon (left) */
+        canvas_draw_circle(c, 32, 34, 8);
+        canvas_draw_disc(c, 32, 34, 4);
+        draw_str(c, "IR", 12, 48);
+
+        /* NFC icon (right) */
+        int ncx = 96, ncy = 34;
+        int nw = 16, nh = 22;
+        canvas_draw_frame(c, ncx - nw / 2, ncy - nh / 2, nw, nh);
+        canvas_draw_disc(c, ncx, ncy, 2);
+        canvas_draw_line(c, ncx - nw / 2 + 4, ncy - nh / 2 + 4,
+                         ncx - nw / 2 + 8, ncy - nh / 2 + 8);
+        draw_str(c, "NFC", 78, 48);
+
+        draw_str_centered(c, "POINT REMOTE OR TAP CARD", 56);
     }
 }
 
@@ -1098,7 +1252,7 @@ static void render_summon(Canvas* c, EyePhantomApp* app) {
     draw_str(c, buf, 70, 39);
 
     /* Protocol */
-    const char* origin = "IR:";
+    const char* origin = (p->protocol == PROTO_NFC) ? "NFC:" : "IR:";
     snprintf(buf, sizeof(buf), "%s%s %02lX:%02lX", origin,
              PROTO_NAMES[p->protocol], p->address & 0xFF, p->command & 0xFF);
     draw_str(c, buf, 2, 48);
@@ -1552,7 +1706,7 @@ static void app_input(InputEvent* event, void* context) {
             }
             if(key == InputKeyOk && is_act) {
                 switch(app->cursor) {
-                    case 0: scan_ir_start(app); app->scene = SCENE_SCAN; break;
+                    case 0: scan_ir_start(app); scan_nfc_start(app); app->scan_timer = 0; app->scene = SCENE_SCAN; break;
                     case 1:
                         if(!app->has_active) {
                             strncpy(app->message, "NO PHANTOM YET!", 32);
@@ -1590,11 +1744,13 @@ static void app_input(InputEvent* event, void* context) {
         }
         case SCENE_SCAN: {
             if(key == InputKeyBack && is_act) {
-                if(app->ir_running) scan_ir_stop(app);
+                scan_stop_all(app);
                 app->scene = SCENE_MENU;
             }
-            if(key == InputKeyOk && is_act && !app->ir_running) {
+            if(key == InputKeyOk && is_act && !scan_is_any_active(app)) {
                 scan_ir_start(app);
+                scan_nfc_start(app);
+                app->scan_timer = 0;
             }
             break;
         }
@@ -1793,19 +1949,30 @@ static void app_tick(void* context) {
     /* Process IR signal captured in callback (safe to stop worker here) */
     if(app->ir_done) {
         app->ir_done = false;
-        infrared_worker_rx_stop(app->ir_worker);
-        app->ir_running = false;
+        scan_ir_stop(app);
+        /* Stop NFC too — one phantom at a time */
+        if(app->nfc_running) scan_nfc_stop(app);
+        app->scene = SCENE_SUMMON;
+        app->summon_reveal = true;
+        app->reveal_timer = 0;
+    }
+
+    /* Process NFC tag detected in callback */
+    if(app->nfc_done && !app->ir_done) {
+        app->nfc_done = false;
+        scan_nfc_stop(app);
+        /* Stop IR too — one phantom at a time */
+        if(app->ir_running) scan_ir_stop(app);
         app->scene = SCENE_SUMMON;
         app->summon_reveal = true;
         app->reveal_timer = 0;
     }
 
     /* Scan timeout — auto-stop after ~30 seconds of no signal */
-    if(app->ir_running && !app->ir_done) {
+    if(scan_is_any_active(app) && !app->ir_done && !app->nfc_done) {
         app->scan_timer++;
         if(app->scan_timer > 900) {
-            infrared_worker_rx_stop(app->ir_worker);
-            app->ir_running = false;
+            scan_stop_all(app);
             strncpy(app->message, "NO SIGNAL", 32);
             app->message_timer = 90;
             app->scene = SCENE_MENU;
@@ -1892,6 +2059,11 @@ static EyePhantomApp* app_alloc(void) {
     /* IR worker — always available on Flipper */
     app->ir_worker = infrared_worker_alloc();
 
+    /* NFC — for RFID/NFC card detection */
+    app->nfc = nfc_alloc();
+    app->nfc_device = nfc_device_alloc();
+    app->nfc_poller = NULL;
+
     app->scene     = SCENE_TITLE;
     app->running   = true;
 
@@ -1900,7 +2072,7 @@ static EyePhantomApp* app_alloc(void) {
 
 static void app_free(EyePhantomApp* app) {
     /* Stop any running scans */
-    if(app->ir_running && app->ir_worker) scan_ir_stop(app);
+    scan_stop_all(app);
 
     if(app->tick_timer) {
         furi_timer_stop(app->tick_timer);
@@ -1908,6 +2080,8 @@ static void app_free(EyePhantomApp* app) {
     }
 
     if(app->ir_worker) infrared_worker_free(app->ir_worker);
+    if(app->nfc_device) nfc_device_free(app->nfc_device);
+    if(app->nfc) nfc_free(app->nfc);
 
     gui_remove_view_port(app->gui, app->view_port);
     view_port_free(app->view_port);

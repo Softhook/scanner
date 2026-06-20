@@ -1,21 +1,21 @@
 # Game Design Document: Eye of the Phantom (MVP — Single Creature)
 
 ## 1. Vision Statement
-**Eye of the Phantom** is an original, hardware-integrated roguelite monster battler designed exclusively for the Flipper Zero. It transforms the player's real-world environment into the game's ecosystem by using the Flipper's built-in Infrared (IR) receiver. Players scan real-world remotes (TVs, AC units, led strips) to procedurally generate "Phantoms" and dive into an endless digital dungeon.
+**Eye of the Phantom** is an original, hardware-integrated roguelite monster battler designed exclusively for the Flipper Zero. It transforms the player's real-world environment into the game's ecosystem by using the Flipper's built-in Infrared (IR) receiver and NFC/RFID reader. Players scan real-world remotes (TVs, AC units, LED strips) or tap NFC cards/tags to procedurally generate "Phantoms" and dive into an endless digital dungeon.
 
 > **MVP Scope:** The player has a **single active Phantom** at a time. No roster swapping. This keeps the codebase small and the gameplay focused on the core scan → fight loop.
 
 **Platform:** Flipper Zero  
 **Display:** 128x64 Monochrome LCD  
 **Controls:** D-Pad + OK / Back  
-**Key Hardware Integration:** IR Receiver
+**Key Hardware Integration:** IR Receiver, NFC Reader
 
 ---
 
 ## 2. Core Gameplay Loop
 The game revolves around three distinct phases that encourage the player to constantly switch between real-world exploration and on-device gameplay.
 
-1.  **Scan (The Real World):** Point external IR remotes at the Flipper to capture raw hexadecimal signals.
+1.  **Scan (The Real World):** Point external IR remotes at the Flipper or tap NFC cards/tags to capture raw signals.
 2.  **Summon (The Forge):** Convert that hex data into a unique, playable Phantom. The player can choose to keep it or discard it.
 3.  **Descend (The Mainframe):** Enter an endless sequence of turn-based RPG battles to earn upgrade currency.
 
@@ -27,10 +27,11 @@ The magic of the game relies on deterministic generation. The same TV remote but
 When a signal is captured, the Flipper parses three components: Protocol, Address, and Command.
 
 ### A. Element / Class (Based on Protocol)
-The type of remote defines the combat archetype:
+The type of remote or NFC tag determines the combat archetype:
 *   **NEC Protocol (Standard TVs):** `Brawler` (Favors ATK and HP)
 *   **Sony / SIRC (Sony Devices):** `Defender` (Favors DEF and HP)
 *   **Samsung Protocol:** `Glitch` (Favors SPD and ATK)
+*   **NFC (RFID/NFC Tags):** Mapped dynamically using `(uid_parity) % 3` into one of the three classes above.
 *   **RC5 / Unknown:** Mapped dynamically using `(address + command) % 3` into one of the three classes above.
 
 ### Class Matchup Advantage (Rock-Paper-Scissors)

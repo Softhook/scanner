@@ -4,7 +4,7 @@ App(
     apptype=FlipperAppType.EXTERNAL,
     entry_point="eye_phantom_app",
     stack_size=4 * 1024,
-    requires=["gui", "infrared", "storage", "notification"],
+    requires=["gui", "infrared", "nfc", "storage", "notification"],
     fap_category="Games",
     fap_description="IR/RF monster battler roguelite",
     fap_author="scanner",
