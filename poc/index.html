@@ -1066,8 +1066,8 @@ function startCombat() {
     const es = getEffectiveStats(enemy);
     const foeFirst = es.spd > ps.spd;
     game.combat = {
-      player: { phantom: game.activePhantom, hp: ps.hp, maxHp: ps.hp, heat: 0, overloaded: false, stats: ps },
-      enemy:  { phantom: enemy, hp: game.savedEnemyHp, maxHp: es.hp, heat: game.savedEnemyHeat, overloaded: game.savedEnemyOverloaded, stats: es },
+      player: { phantom: game.activePhantom, hp: ps.hp, maxHp: ps.hp, heat: 0, overloaded: false, defending: false, stats: ps },
+      enemy:  { phantom: enemy, hp: game.savedEnemyHp, maxHp: es.hp, heat: game.savedEnemyHeat, overloaded: game.savedEnemyOverloaded, defending: false, stats: es },
       state: foeFirst ? 'ENEMY_TURN' : 'PLAYER_TURN',
       floor: game.currentFloor,
       log: [foeFirst ? 'FOE IS FASTER REMATCH!' : 'FLOOR ' + game.currentFloor + ' - REMATCH!'],
@@ -1083,8 +1083,8 @@ function startCombat() {
   const es = getEffectiveStats(enemy);
   const foeFirst = es.spd > ps.spd;
   game.combat = {
-    player: { phantom: game.activePhantom, hp: ps.hp, maxHp: ps.hp, heat: 0, overloaded: false, stats: ps },
-    enemy:  { phantom: enemy, hp: es.hp, maxHp: es.hp, heat: 0, overloaded: false, stats: es },
+    player: { phantom: game.activePhantom, hp: ps.hp, maxHp: ps.hp, heat: 0, overloaded: false, defending: false, stats: ps },
+    enemy:  { phantom: enemy, hp: es.hp, maxHp: es.hp, heat: 0, overloaded: false, defending: false, stats: es },
     state: foeFirst ? 'ENEMY_TURN' : 'PLAYER_TURN',
     floor: game.currentFloor,
     log: [foeFirst ? 'FOE IS FASTER!' : 'FLOOR ' + game.currentFloor + ' - FIGHT!'],
@@ -1124,12 +1124,18 @@ function calcDamage(attacker, defender, actionType) {
   return { damage, isCrit };
 }
 
+function addHeat(unit, baseHeat) {
+  const spdReduce = Math.floor(unit.stats.spd / 2);
+  let heat = baseHeat - spdReduce;
+  if (heat < 0) heat = 0;
+  unit.heat += heat;
+}
+
 function executeTurn(actionIdx) {
   const c = game.combat;
   if (c.state !== 'PLAYER_TURN') return;
 
   c.player.defending = false;
-  const spdReduce = Math.floor(c.player.stats.spd / 2);
 
   // Player action
   if (c.player.overloaded) {
@@ -1143,9 +1149,7 @@ function executeTurn(actionIdx) {
         let dmg = res.damage;
         if (c.enemy.defending) { dmg = Math.floor(dmg * 0.5); c.enemy.defending = false; }
         c.enemy.hp -= dmg;
-        let heat = 20 - spdReduce;
-        if (heat < 0) heat = 0;
-        c.player.heat += heat;
+        addHeat(c.player, 20);
         c.log.push('STRIKE: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
         break;
@@ -1155,9 +1159,7 @@ function executeTurn(actionIdx) {
         let dmg = res.damage;
         if (c.enemy.defending) { dmg = Math.floor(dmg * 0.5); c.enemy.defending = false; }
         c.enemy.hp -= dmg;
-        let heat = 35 - spdReduce;
-        if (heat < 0) heat = 0;
-        c.player.heat += heat;
+        addHeat(c.player, 35);
         c.log.push('SURGE: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 6; sfxHit(); }
         break;
@@ -1174,9 +1176,7 @@ function executeTurn(actionIdx) {
         let dmg = res.damage;
         if (c.enemy.defending) { dmg = Math.floor(dmg * 0.5); c.enemy.defending = false; }
         c.enemy.hp -= dmg;
-        let heat = 10 - spdReduce;
-        if (heat < 0) heat = 0;
-        c.player.heat += heat;
+        addHeat(c.player, 10);
         c.enemy.heat += 20;
         if (c.enemy.heat >= 100) {
           c.enemy.overloaded = true;
@@ -1217,7 +1217,7 @@ function executeTurn(actionIdx) {
     game.activePhantom = null;
     saveGame();
     sfxDefeat();
-    setTimeout(() => setState('DEFEAT'), 800);
+    setTimeout(() => setState('DEFEAT'), 1500);
     return;
   }
 
@@ -1231,13 +1231,13 @@ function executeTurn(actionIdx) {
     game.hasSavedCombat = false;
     saveGame();
     sfxVictory();
-    setTimeout(() => setState('VICTORY'), 800);
+    setTimeout(() => setState('VICTORY'), 1500);
     game.combat.shardReward = shards;
     return;
   }
 
   // Enemy turn
-  setTimeout(() => enemyTurn(), 300);
+  setTimeout(() => enemyTurn(), 1500);
   c.state = 'ENEMY_TURN';
 }
 
@@ -1246,7 +1246,6 @@ function enemyTurn() {
   if (c.state !== 'ENEMY_TURN') return;
 
   c.enemy.defending = false;
-  const spdReduce = Math.floor(c.enemy.stats.spd / 2);
 
   if (c.enemy.overloaded) {
     c.log.push('ENEMY OVERLOADED!');
@@ -1273,9 +1272,7 @@ function enemyTurn() {
         let dmg = res.damage;
         if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
         c.player.hp -= dmg;
-        let heat = 20 - spdReduce;
-        if (heat < 0) heat = 0;
-        c.enemy.heat += heat;
+        addHeat(c.enemy, 20);
         c.log.push('FOE STR: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
         break;
@@ -1285,9 +1282,7 @@ function enemyTurn() {
         let dmg = res.damage;
         if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
         c.player.hp -= dmg;
-        let heat = 35 - spdReduce;
-        if (heat < 0) heat = 0;
-        c.enemy.heat += heat;
+        addHeat(c.enemy, 35);
         c.log.push('FOE SRG: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 6; sfxHit(); }
         break;
@@ -1303,17 +1298,17 @@ function enemyTurn() {
         let dmg = res.damage;
         if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
         c.player.hp -= dmg;
-        let heat = 10 - spdReduce;
-        if (heat < 0) heat = 0;
-        c.enemy.heat += heat;
+        addHeat(c.enemy, 10);
         c.player.heat += 20;
         if (c.player.heat >= 100) {
           c.player.overloaded = true;
           c.player.heat = 100;
           const ov = Math.floor(c.player.maxHp * 0.08);
           c.player.hp -= ov;
+          c.log.push('FOE REV! OVLD -' + ov);
+        } else {
+          c.log.push('FOE REV: ' + dmg + ' +20H');
         }
-        c.log.push('FOE REV: ' + dmg);
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
         break;
       }
@@ -1340,7 +1335,7 @@ function enemyTurn() {
     saveGame();
     sfxVictory();
     game.combat.shardReward = shards;
-    setTimeout(() => setState('VICTORY'), 800);
+    setTimeout(() => setState('VICTORY'), 1500);
     return;
   }
 
@@ -1358,12 +1353,16 @@ function enemyTurn() {
     game.activePhantom = null;
     saveGame();
     sfxDefeat();
-    setTimeout(() => setState('DEFEAT'), 800);
+    setTimeout(() => setState('DEFEAT'), 1500);
     return;
   }
 
-  c.state = 'PLAYER_TURN';
-  c.player.defending = false;
+  setTimeout(() => {
+    if (c.state === 'ENEMY_TURN') {
+      c.state = 'PLAYER_TURN';
+      c.player.defending = false;
+    }
+  }, 1500);
 }
 
 // ============================================================
@@ -1804,29 +1803,29 @@ function renderInfo() {
     drawLine(68, 21, 68, 24);
     drawLine(68, 21, 72, 21);
 
-    drawTextCentered('ADVANTAGE DEALS 1.3X DAMAGE', 48);
-    drawTextCentered('DISADVANTAGE DEALS 0.8X DMG', 56);
+    drawTextCentered('ADVANTAGE: DEALS 1.3X DMG', 48);
+    drawTextCentered('DISADVANTAGE: 0.8X DMG', 56);
   } else if (game.cursor === 1) {
     /* Page 2: Actions */
     drawText('UP:STRIKE', 2, 13);
-    drawText('1.0X, +20H', 52, 13);
+    drawText('1.0X, +20H', 48, 13);
 
     drawText('RT:SURGE', 2, 23);
-    drawText('1.5X, +35H', 52, 23);
+    drawText('1.5X, +35H', 48, 23);
 
     drawText('DN:GUARD', 2, 33);
-    drawText('BLOCK, -30H', 52, 33);
+    drawText('BLOCK, -30H', 48, 33);
 
     drawText('LT:REV', 2, 43);
-    drawText('0.3X, +10H/+20F', 52, 43);
+    drawText('0.3X, +10H/+20F', 48, 43);
 
-    drawTextCentered('OVERLOAD AT 100 HEAT (8% DMG)', 55);
+    drawTextCentered('100 HEAT = OVERLOAD (8%HP)', 55);
   } else {
     /* Page 3: Stats */
     drawText('HP : HEALTH POINTS', 2, 13);
-    drawText('ATK: BASE DAMAGE MULTIPLIER', 2, 23);
+    drawText('ATK: BASE DMG MULTIPLIER', 2, 23);
     drawText('DEF: REDUCES DAMAGE TAKEN', 2, 33);
-    drawText('SPD: ACT FIRST & CRIT RATE', 2, 43);
+    drawText('SPD: ACTS FIRST & CRIT %', 2, 43);
 
     drawTextCentered('COOLING: SPD/2 PER ACTION', 55);
   }

@@ -120,6 +120,7 @@ typedef enum {
     COMBAT_ENEMY_TURN,
     COMBAT_WIN,
     COMBAT_LOSE,
+    COMBAT_DELAY,
 } CombatState;
 
 typedef struct {
@@ -128,6 +129,8 @@ typedef struct {
     CombatState state;
     uint16_t    floor;
     char        log[COMBAT_LOG_LEN];
+    uint8_t     delay_timer;
+    CombatState next_state;
 } Combat;
 
 typedef struct {
@@ -169,6 +172,7 @@ typedef struct {
     int16_t     saved_enemy_heat;
     bool        saved_enemy_overloaded;
     uint16_t    saved_combat_floor;
+    bool        pending_save;
 } EyePhantomApp;
 
 /* ================================================================
@@ -356,6 +360,7 @@ static void combat_start(EyePhantomApp* app) {
         app->has_saved_combat = false;
         c->floor = app->current_floor;
         app->cursor = 0;
+        c->delay_timer = 0;
 
         /* SPD-based turn order */
         if(c->enemy.stats.spd > c->player.stats.spd) {
@@ -377,6 +382,7 @@ static void combat_start(EyePhantomApp* app) {
     app->has_saved_combat = false;
     c->floor = app->current_floor;
     app->cursor = 0;
+    c->delay_timer = 0;
 
     /* SPD-based turn order */
     if(c->enemy.stats.spd > c->player.stats.spd) {
@@ -427,12 +433,18 @@ static int16_t combat_calc_damage(CombatUnit* attacker, CombatUnit* defender,
     return (int16_t)dmg;
 }
 
+static void combat_unit_add_heat(CombatUnit* unit, int16_t base_heat) {
+    int16_t spd_reduce = unit->stats.spd / 2;
+    int16_t heat = base_heat - spd_reduce;
+    if(heat < 0) heat = 0;
+    unit->heat += heat;
+}
+
 static void combat_player_action(EyePhantomApp* app, uint8_t action) {
     Combat* c = &app->combat;
     if(c->state != COMBAT_PLAYER_TURN) return;
 
     c->player.defending = false;
-    int16_t spd_reduce = c->player.stats.spd / 2;
 
     if(c->player.overloaded) {
         snprintf(c->log, COMBAT_LOG_LEN, "OVERLOADED!");
@@ -445,9 +457,7 @@ static void combat_player_action(EyePhantomApp* app, uint8_t action) {
                 int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 0, &crit);
                 if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
                 c->enemy.hp -= dmg;
-                int16_t heat = 20 - spd_reduce;
-                if(heat < 0) heat = 0;
-                c->player.heat += heat;
+                combat_unit_add_heat(&c->player, 20);
                 snprintf(c->log, COMBAT_LOG_LEN, "STRIKE:%d%s", dmg, crit ? " CRIT!" : "");
                 break;
             }
@@ -456,9 +466,7 @@ static void combat_player_action(EyePhantomApp* app, uint8_t action) {
                 int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 1, &crit);
                 if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
                 c->enemy.hp -= dmg;
-                int16_t heat = 35 - spd_reduce;
-                if(heat < 0) heat = 0;
-                c->player.heat += heat;
+                combat_unit_add_heat(&c->player, 35);
                 snprintf(c->log, COMBAT_LOG_LEN, "SURGE:%d%s", dmg, crit ? " CRIT!" : "");
                 break;
             }
@@ -473,9 +481,7 @@ static void combat_player_action(EyePhantomApp* app, uint8_t action) {
                 int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 3, &crit);
                 if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
                 c->enemy.hp -= dmg;
-                int16_t heat = 10 - spd_reduce;
-                if(heat < 0) heat = 0;
-                c->player.heat += heat;
+                combat_unit_add_heat(&c->player, 10);
                 c->enemy.heat += 20;
                 /* Check enemy overload from heat transfer */
                 if(c->enemy.heat >= 100) {
@@ -504,18 +510,24 @@ static void combat_player_action(EyePhantomApp* app, uint8_t action) {
     /* Check player defeat from overload */
     if(c->player.hp <= 0) {
         c->player.hp = 0;
-        c->state = COMBAT_LOSE;
+        c->next_state = COMBAT_LOSE;
+        c->delay_timer = 45; /* ~1.5s delay */
+        c->state = COMBAT_DELAY;
         return;
     }
 
     /* Check enemy defeat */
     if(c->enemy.hp <= 0) {
         c->enemy.hp = 0;
-        c->state = COMBAT_WIN;
+        c->next_state = COMBAT_WIN;
+        c->delay_timer = 45; /* ~1.5s delay */
+        c->state = COMBAT_DELAY;
         return;
     }
 
-    c->state = COMBAT_ENEMY_TURN;
+    c->next_state = COMBAT_ENEMY_TURN;
+    c->delay_timer = 45; /* ~1.5s delay */
+    c->state = COMBAT_DELAY;
 }
 
 static void combat_enemy_action(EyePhantomApp* app) {
@@ -523,7 +535,6 @@ static void combat_enemy_action(EyePhantomApp* app) {
     if(c->state != COMBAT_ENEMY_TURN) return;
 
     c->enemy.defending = false;
-    int16_t spd_reduce = c->enemy.stats.spd / 2;
 
     if(c->enemy.overloaded) {
         snprintf(c->log, COMBAT_LOG_LEN, "FOE OVERLOADED!");
@@ -551,9 +562,7 @@ static void combat_enemy_action(EyePhantomApp* app) {
                 int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 0, &crit);
                 if(c->player.defending) { dmg /= 2; c->player.defending = false; }
                 c->player.hp -= dmg;
-                int16_t heat = 20 - spd_reduce;
-                if(heat < 0) heat = 0;
-                c->enemy.heat += heat;
+                combat_unit_add_heat(&c->enemy, 20);
                 snprintf(c->log, COMBAT_LOG_LEN, "FOE STR:%d%s", dmg, crit ? " CRIT!" : "");
                 break;
             }
@@ -562,9 +571,7 @@ static void combat_enemy_action(EyePhantomApp* app) {
                 int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 1, &crit);
                 if(c->player.defending) { dmg /= 2; c->player.defending = false; }
                 c->player.hp -= dmg;
-                int16_t heat = 35 - spd_reduce;
-                if(heat < 0) heat = 0;
-                c->enemy.heat += heat;
+                combat_unit_add_heat(&c->enemy, 35);
                 snprintf(c->log, COMBAT_LOG_LEN, "FOE SRG:%d%s", dmg, crit ? " CRIT!" : "");
                 break;
             }
@@ -579,9 +586,7 @@ static void combat_enemy_action(EyePhantomApp* app) {
                 int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 3, &crit);
                 if(c->player.defending) { dmg /= 2; c->player.defending = false; }
                 c->player.hp -= dmg;
-                int16_t heat = 10 - spd_reduce;
-                if(heat < 0) heat = 0;
-                c->enemy.heat += heat;
+                combat_unit_add_heat(&c->enemy, 10);
                 c->player.heat += 20;
                 /* Check player overload from heat transfer */
                 if(c->player.heat >= 100) {
@@ -589,8 +594,10 @@ static void combat_enemy_action(EyePhantomApp* app) {
                     c->player.heat = 100;
                     int16_t ov = c->player.max_hp * 8 / 100;
                     c->player.hp -= ov;
+                    snprintf(c->log, COMBAT_LOG_LEN, "FOE REV! OVLD -%d", ov);
+                } else {
+                    snprintf(c->log, COMBAT_LOG_LEN, "FOE REV:%d +20H", dmg);
                 }
-                snprintf(c->log, COMBAT_LOG_LEN, "FOE REV:%d +20H", dmg);
                 break;
             }
         }
@@ -602,23 +609,30 @@ static void combat_enemy_action(EyePhantomApp* app) {
         c->enemy.heat = 100;
         int16_t ov_dmg = c->enemy.max_hp * 8 / 100;
         c->enemy.hp -= ov_dmg;
+        snprintf(c->log, COMBAT_LOG_LEN, "FOE OVERLOAD! -%d", ov_dmg);
     }
 
     /* Check enemy defeat from overload */
     if(c->enemy.hp <= 0) {
         c->enemy.hp = 0;
-        c->state = COMBAT_WIN;
+        c->next_state = COMBAT_WIN;
+        c->delay_timer = 45; /* ~1.5s delay */
+        c->state = COMBAT_DELAY;
         return;
     }
 
     /* Check player defeat */
     if(c->player.hp <= 0) {
         c->player.hp = 0;
-        c->state = COMBAT_LOSE;
+        c->next_state = COMBAT_LOSE;
+        c->delay_timer = 45; /* ~1.5s delay */
+        c->state = COMBAT_DELAY;
         return;
     }
 
-    c->state = COMBAT_PLAYER_TURN;
+    c->next_state = COMBAT_PLAYER_TURN;
+    c->delay_timer = 45; /* ~1.5s delay */
+    c->state = COMBAT_DELAY;
 }
 
 /* ================================================================
@@ -1164,14 +1178,15 @@ static void render_combat(Canvas* c, EyePhantomApp* app) {
     /* --- BOTTOM: actions (rows 49-63) --- */
     canvas_draw_line(c, 0, 49, 127, 49);
 
-    if(co->state == COMBAT_PLAYER_TURN) {
+    if(co->state == COMBAT_PLAYER_TURN || 
+       (co->state == COMBAT_DELAY && co->next_state == COMBAT_ENEMY_TURN)) {
         /* 2x2 grid: STRIKE  SURGE / GUARD  REV */
         const char* acts[] = {"STRIKE", "SURGE", "GUARD", "REV"};
         int px[] = {12, 68, 12, 68};
         int py[] = {51, 51, 58, 58};
 
         for(int i = 0; i < 4; i++) {
-            if(i == app->cursor) {
+            if(co->state == COMBAT_PLAYER_TURN && i == app->cursor) {
                 int w = (int)strlen(acts[i]) * CHAR_W + 4;
                 canvas_draw_box(c, px[i], py[i] - 1, w, 7);
                 canvas_invert_color(c);
@@ -1181,11 +1196,14 @@ static void render_combat(Canvas* c, EyePhantomApp* app) {
                 draw_str(c, acts[i], px[i] + 2, py[i]);
             }
         }
-    } else if(co->state == COMBAT_ENEMY_TURN) {
+    } else if(co->state == COMBAT_ENEMY_TURN || 
+              (co->state == COMBAT_DELAY && co->next_state == COMBAT_PLAYER_TURN)) {
         draw_str_centered(c, "ENEMY TURN...", 55);
-    } else if(co->state == COMBAT_WIN) {
+    } else if(co->state == COMBAT_WIN || 
+              (co->state == COMBAT_DELAY && co->next_state == COMBAT_WIN)) {
         draw_str_centered(c, "VICTORY!", 55);
-    } else if(co->state == COMBAT_LOSE) {
+    } else if(co->state == COMBAT_LOSE || 
+              (co->state == COMBAT_DELAY && co->next_state == COMBAT_LOSE)) {
         draw_str_centered(c, "DEFEATED...", 55);
     }
 }
@@ -1376,29 +1394,29 @@ static void render_info(Canvas* c, EyePhantomApp* app) {
         canvas_draw_line(c, 68, 21, 68, 24);
         canvas_draw_line(c, 68, 21, 72, 21);
 
-        draw_str_centered(c, "ADVANTAGE DEALS 1.3X DAMAGE", 48);
-        draw_str_centered(c, "DISADVANTAGE DEALS 0.8X DMG", 56);
+        draw_str_centered(c, "ADVANTAGE: DEALS 1.3X DMG", 48);
+        draw_str_centered(c, "DISADVANTAGE: 0.8X DMG", 56);
     } else if(app->cursor == 1) {
         /* Page 2: Actions */
         draw_str(c, "UP:STRIKE", 2, 13);
-        draw_str(c, "1.0X, +20H", 52, 13);
+        draw_str(c, "1.0X, +20H", 48, 13);
 
         draw_str(c, "RT:SURGE", 2, 23);
-        draw_str(c, "1.5X, +35H", 52, 23);
+        draw_str(c, "1.5X, +35H", 48, 23);
 
         draw_str(c, "DN:GUARD", 2, 33);
-        draw_str(c, "BLOCK, -30H", 52, 33);
+        draw_str(c, "BLOCK, -30H", 48, 33);
 
         draw_str(c, "LT:REV", 2, 43);
-        draw_str(c, "0.3X, +10H/+20F", 52, 43);
+        draw_str(c, "0.3X, +10H/+20F", 48, 43);
 
-        draw_str_centered(c, "OVERLOAD AT 100 HEAT (8% DMG)", 55);
+        draw_str_centered(c, "100 HEAT = OVERLOAD (8%HP)", 55);
     } else {
         /* Page 3: Stats */
         draw_str(c, "HP : HEALTH POINTS", 2, 13);
-        draw_str(c, "ATK: BASE DAMAGE MULTIPLIER", 2, 23);
+        draw_str(c, "ATK: BASE DMG MULTIPLIER", 2, 23);
         draw_str(c, "DEF: REDUCES DAMAGE TAKEN", 2, 33);
-        draw_str(c, "SPD: ACT FIRST & CRIT RATE", 2, 43);
+        draw_str(c, "SPD: ACTS FIRST & CRIT %", 2, 43);
 
         draw_str_centered(c, "COOLING: SPD/2 PER ACTION", 55);
     }
@@ -1484,7 +1502,7 @@ static void app_input(InputEvent* event, void* context) {
                     case 2:
                         if(app->current_floor > 1) {
                             app->current_floor--;
-                            game_save(app);
+                            app->pending_save = true;
                             strncpy(app->message, "ASCENDED!", 32);
                             app->message_timer = 60;
                         } else {
@@ -1536,7 +1554,7 @@ static void app_input(InputEvent* event, void* context) {
                     }
                     app->active_phantom = app->pending_phantom;
                     app->has_active = true;
-                    game_save(app);
+                    app->pending_save = true;
                     strncpy(app->message, "ACQUIRED!", 32);
                     app->message_timer = 60;
                 }
@@ -1570,26 +1588,6 @@ static void app_input(InputEvent* event, void* context) {
 
             if(key == InputKeyOk && is_act) {
                 combat_player_action(app, app->cursor);
-                if(co->state == COMBAT_WIN) {
-                    uint32_t shards = app->current_floor + 1;
-                    app->data_shards += shards;
-                    app->current_floor++;
-                    app->has_saved_combat = false;
-                    game_save(app);
-                    app->scene = SCENE_VICTORY;
-                } else if(co->state == COMBAT_LOSE) {
-                    /* Save enemy state so player can swap phantom and rematch */
-                    app->saved_enemy_phantom   = co->enemy.phantom;
-                    app->saved_enemy_hp        = co->enemy.hp;
-                    app->saved_enemy_heat      = co->enemy.heat;
-                    app->saved_enemy_overloaded = co->enemy.overloaded;
-                    app->saved_combat_floor    = app->current_floor;
-                    app->has_saved_combat      = true;
-                    app->has_active = false;
-                    memset(&app->active_phantom, 0, sizeof(Phantom));
-                    game_save(app);
-                    app->scene = SCENE_DEFEAT;
-                }
             }
             if(key == InputKeyBack && is_act) {
                 app->saved_enemy_phantom   = co->enemy.phantom;
@@ -1598,7 +1596,7 @@ static void app_input(InputEvent* event, void* context) {
                 app->saved_enemy_overloaded = co->enemy.overloaded;
                 app->saved_combat_floor    = app->current_floor;
                 app->has_saved_combat      = true;
-                game_save(app);
+                app->pending_save = true;
 
                 app->scene = SCENE_MENU;
                 app->cursor = 0;
@@ -1674,7 +1672,7 @@ static void app_input(InputEvent* event, void* context) {
                     if(app->data_shards >= cost) {
                         app->data_shards -= cost;
                         (*ups[app->cursor])++;
-                        game_save(app);
+                        app->pending_save = true;
                     } else {
                         strncpy(app->message, "NOT ENOUGH!", 32);
                         app->message_timer = 60;
@@ -1713,7 +1711,7 @@ static void app_input(InputEvent* event, void* context) {
                     }
                     app->active_phantom = selected;
                     app->has_active = true;
-                    game_save(app);
+                    app->pending_save = true;
                     strncpy(app->message, "SET ACTIVE!", 32);
                     app->message_timer = 60;
                     app->scene = SCENE_CAMP;
@@ -1757,31 +1755,40 @@ static void app_tick(void* context) {
         }
     }
 
-    /* Combat enemy turn after delay */
-    if(app->scene == SCENE_COMBAT && app->combat.state == COMBAT_ENEMY_TURN) {
-        if(app->tick % 15 == 0) { /* ~250ms delay */
-            combat_enemy_action(app);
-            if(app->combat.state == COMBAT_WIN) {
-                uint32_t shards = app->current_floor + 1;
-                app->data_shards += shards;
-                app->current_floor++;
-                app->has_saved_combat = false;
-                game_save(app);
-                app->scene = SCENE_VICTORY;
-            } else if(app->combat.state == COMBAT_LOSE) {
-                /* Save enemy state so player can swap phantom and rematch */
-                app->saved_enemy_phantom   = app->combat.enemy.phantom;
-                app->saved_enemy_hp        = app->combat.enemy.hp;
-                app->saved_enemy_heat      = app->combat.enemy.heat;
-                app->saved_enemy_overloaded = app->combat.enemy.overloaded;
-                app->saved_combat_floor    = app->current_floor;
-                app->has_saved_combat      = true;
-                app->has_active = false;
-                memset(&app->active_phantom, 0, sizeof(Phantom));
-                game_save(app);
-                app->scene = SCENE_DEFEAT;
+    /* Combat delay timer processing */
+    if(app->scene == SCENE_COMBAT && app->combat.state == COMBAT_DELAY) {
+        if(app->combat.delay_timer > 0) {
+            app->combat.delay_timer--;
+            if(app->combat.delay_timer == 0) {
+                if(app->combat.next_state == COMBAT_WIN) {
+                    uint32_t shards = app->current_floor + 1;
+                    app->data_shards += shards;
+                    app->current_floor++;
+                    app->has_saved_combat = false;
+                    app->pending_save = true;
+                    app->scene = SCENE_VICTORY;
+                } else if(app->combat.next_state == COMBAT_LOSE) {
+                    /* Save enemy state so player can swap phantom and rematch */
+                    app->saved_enemy_phantom   = app->combat.enemy.phantom;
+                    app->saved_enemy_hp        = app->combat.enemy.hp;
+                    app->saved_enemy_heat      = app->combat.enemy.heat;
+                    app->saved_enemy_overloaded = app->combat.enemy.overloaded;
+                    app->saved_combat_floor    = app->current_floor;
+                    app->has_saved_combat      = true;
+                    app->has_active = false;
+                    memset(&app->active_phantom, 0, sizeof(Phantom));
+                    app->pending_save = true;
+                    app->scene = SCENE_DEFEAT;
+                } else {
+                    app->combat.state = app->combat.next_state;
+                }
             }
         }
+    }
+
+    /* Combat enemy turn */
+    if(app->scene == SCENE_COMBAT && app->combat.state == COMBAT_ENEMY_TURN) {
+        combat_enemy_action(app);
     }
 
     /* Message timer */
@@ -1866,6 +1873,10 @@ int32_t eye_phantom_app(void* p) {
 
     /* Stay alive until user presses Back on title screen */
     while(app->running) {
+        if(app->pending_save) {
+            app->pending_save = false;
+            game_save(app);
+        }
         furi_delay_ms(33);
     }
 
