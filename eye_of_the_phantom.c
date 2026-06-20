@@ -1265,45 +1265,60 @@ static void render_phantom(Canvas* c, EyePhantomApp* app) {
         return;
     }
 
+    /* Name and class banner at top */
     draw_str(c, p->name, 2, 2);
     canvas_draw_line(c, 0, 9, 127, 9);
 
-    draw_sprite(c, p->sprite, 4, 14);
-    draw_str(c, CLASS_NAMES[p->cls], 26, 14);
+    /* Large phantom sprite on the left (3× scale) */
+    #define SCALE 3
+    int spr_x = 2;
+    int spr_y = 14;
+    for(int row = 0; row < PHANTOM_SPRITE_H; row++) {
+        for(int col = 0; col < PHANTOM_SPRITE_W; col++) {
+            if(p->sprite[row * 2 + col / 8] & (1 << (col % 8)))
+                canvas_draw_box(c, spr_x + col * SCALE, spr_y + row * SCALE,
+                                SCALE, SCALE);
+        }
+    }
+    #undef SCALE
 
+    /* Stats on the right */
     int16_t hp, atk, def, spd;
     phantom_get_effective(p, &hp, &atk, &def, &spd);
 
+    int sx = 56;
     char buf[32];
+    snprintf(buf, sizeof(buf), "%s", CLASS_NAMES[p->cls]);
+    draw_str(c, buf, sx, 14);
+
     if(p->upgrades.hp > 0) {
         snprintf(buf, sizeof(buf), "HP  %d (+%d)", hp, p->upgrades.hp);
     } else {
         snprintf(buf, sizeof(buf), "HP  %d", hp);
     }
-    draw_str(c, buf, 26, 23);
+    draw_str(c, buf, sx, 23);
 
     if(p->upgrades.atk > 0) {
         snprintf(buf, sizeof(buf), "ATK %d (+%d)", atk, p->upgrades.atk);
     } else {
         snprintf(buf, sizeof(buf), "ATK %d", atk);
     }
-    draw_str(c, buf, 26, 31);
+    draw_str(c, buf, sx, 31);
 
     if(p->upgrades.def > 0) {
         snprintf(buf, sizeof(buf), "DEF %d (+%d)", def, p->upgrades.def);
     } else {
         snprintf(buf, sizeof(buf), "DEF %d", def);
     }
-    draw_str(c, buf, 26, 39);
+    draw_str(c, buf, sx, 39);
 
     if(p->upgrades.spd > 0) {
         snprintf(buf, sizeof(buf), "SPD %d (+%d)", spd, p->upgrades.spd);
     } else {
         snprintf(buf, sizeof(buf), "SPD %d", spd);
     }
-    draw_str(c, buf, 26, 47);
+    draw_str(c, buf, sx, 47);
 
-    draw_str(c, PROTO_NAMES[p->protocol], 2, 56);
     draw_str(c, "BACK", 100, 56);
 }
 
