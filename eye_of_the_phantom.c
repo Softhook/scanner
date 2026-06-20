@@ -1539,7 +1539,7 @@ static void render_collection(Canvas* c, EyePhantomApp* app) {
 
     draw_str(c, "COLLECTION", 2, 2);
     char buf[32];
-    snprintf(buf, sizeof(buf), "%u/11", total);
+    snprintf(buf, sizeof(buf), "%u/%u", app->collection_idx + 1, total);
     draw_str(c, buf, 90, 2);
     canvas_draw_line(c, 0, 9, 127, 9);
 
@@ -1555,20 +1555,36 @@ static void render_collection(Canvas* c, EyePhantomApp* app) {
             p = &app->stored[si];
         }
 
-        draw_sprite(c, p->sprite, 4, 14);
-        draw_str(c, p->name, 26, 14);
-        draw_str(c, CLASS_NAMES[p->cls], 26, 22);
+        /* Large phantom sprite on the left (3× scale) */
+        #define SCALE 3
+        int spr_x = 2;
+        int spr_y = 14;
+        for(int row = 0; row < PHANTOM_SPRITE_H; row++) {
+            for(int col = 0; col < PHANTOM_SPRITE_W; col++) {
+                if(p->sprite[row * 2 + col / 8] & (1 << (col % 8)))
+                    canvas_draw_box(c, spr_x + col * SCALE, spr_y + row * SCALE,
+                                    SCALE, SCALE);
+            }
+        }
+        #undef SCALE
+
+        /* Name, class and stats on the right */
+        int sx = 56;
+        draw_str(c, p->name, sx, 14);
+        draw_str(c, CLASS_NAMES[p->cls], sx, 22);
 
         int16_t hp, atk, def, spd;
         phantom_get_effective(p, &hp, &atk, &def, &spd);
-        snprintf(buf, sizeof(buf), "HP%d A%d", hp, atk);
-        draw_str(c, buf, 26, 32);
-        snprintf(buf, sizeof(buf), "D%d S%d", def, spd);
-        draw_str(c, buf, 26, 40);
+        snprintf(buf, sizeof(buf), "HP %d", hp);
+        draw_str(c, buf, sx, 32);
+        snprintf(buf, sizeof(buf), "ATK %d", atk);
+        draw_str(c, buf, sx, 40);
+        snprintf(buf, sizeof(buf), "DEF %d", def);
+        draw_str(c, buf, sx, 48);
+        snprintf(buf, sizeof(buf), "SPD %d", spd);
+        draw_str(c, buf, 88, 48);
 
-        snprintf(buf, sizeof(buf), "%u/%u", app->collection_idx + 1, total);
-        draw_str(c, buf, 2, 56);
-        draw_str(c, "OK=SET", 44, 56);
+        draw_str(c, "OK=SET", 88, 56);
     }
 }
 
