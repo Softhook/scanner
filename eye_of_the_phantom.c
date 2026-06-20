@@ -175,6 +175,7 @@ typedef struct {
     uint32_t    tick;
     Combat      combat;
     uint8_t     collection_idx;
+    bool        collection_dismiss;
     char        message[32];
     uint8_t     message_timer;
     bool        summon_reveal;
@@ -203,10 +204,22 @@ static const struct { float hp, atk, def, spd; } CLASS_BIAS[] = {
     {0.7, 1.1, 0.6, 1.6},  /* GLITCH    */
 };
 
-static const char* SYL1[] = {"ZAR","NEX","VOL","KRI","PHA","DRE","MOX","SYN",
-                              "VEX","LUR","GHO","TYR","BYT","NIX","ORC","HEX"};
-static const char* SYL2[] = {"TON","REX","IUS","ARA","BIT","ION","OID","ULK",
-                              "ASH","IRE","ALT","ORB","INK","OSS","EEL","AMP"};
+static const char* NAME_A[] = {
+    "ZARO","NEKO","VOID","CROW",   /* heads 0-3 */
+    "VULP","AXOL","WISP","BULB",   /* heads 4-7 */
+    "SLIM","MECH","BEST","CRYS",   /* bodies 0-3 */
+    "CHUB","WING","FLUF","SHEL",   /* bodies 4-7 */
+    "CLAW","HOVE","TENT","LEGS",   /* feet 0-3   */
+    "STUB","SWIR","FINS","ROLL",   /* feet 4-7   */
+    "GLOOM","SHADE","BLITZ","GRIM",
+    "WHISP","EMBER","FROST","STORM",
+};
+static const char* NAME_B[] = {
+    "TON","REX","IUS","ARA",
+    "BIT","ION","OID","ULK",
+    "ASH","IRE","ALT","ORB",
+    "INK","OSS","EEL","AMP",
+};
 
 /* ================================================================
  * SIMPLE PRNG (for seeded enemy generation)
@@ -275,10 +288,10 @@ static void phantom_generate(Phantom* p, SignalProtocol proto,
 
     phantom_build_sprite(p);
 
-    /* Procedural name */
-    uint8_t idx1 = (address + command) % 16;
-    uint8_t idx2 = (command * 3 + address) % 16;
-    snprintf(p->name, PHANTOM_NAME_LEN, "%s%s", SYL1[idx1], SYL2[idx2]);
+    /* Procedural name — 32×16 = 512 unique names from part indices */
+    uint16_t combo = p->head_idx + p->body_idx * 8 + p->feet_idx * 64;
+    snprintf(p->name, PHANTOM_NAME_LEN, "%s%s",
+             NAME_A[combo % 32], NAME_B[combo / 32]);
 
     memset(&p->upgrades, 0, sizeof(p->upgrades));
 }
@@ -1584,7 +1597,7 @@ static void render_collection(Canvas* c, EyePhantomApp* app) {
         snprintf(buf, sizeof(buf), "SPD %d", spd);
         draw_str(c, buf, 88, 48);
 
-        draw_str(c, "OK=SET", 88, 56);
+        draw_str(c, app->collection_dismiss ? "OK=DISMISS" : "OK=SET", 80, 56);
     }
 }
 
@@ -1860,6 +1873,7 @@ static void app_input(InputEvent* event, void* context) {
                 if(app->cursor == 1) {
                     app->scene = SCENE_COLLECTION;
                     app->collection_idx = 0;
+                    app->collection_dismiss = false;
                 }
                 if(app->cursor == 2) {
                     app->scene = SCENE_INFO;
@@ -1914,37 +1928,67 @@ static void app_input(InputEvent* event, void* context) {
         case SCENE_COLLECTION: {
             uint8_t total = app->stored_count + (app->has_active ? 1 : 0);
             if(is_nav) {
-                if(key == InputKeyUp || key == InputKeyLeft) {
+                if(key == InputKeyUp) {
+                    app->collection_dismiss = !app->collection_dismiss;
+                }
+                if(key == InputKeyLeft) {
+                    app->collection_dismiss = false;
                     if(app->collection_idx > 0) app->collection_idx--;
                 }
                 if(key == InputKeyDown || key == InputKeyRight) {
+                    app->collection_dismiss = false;
                     if(app->collection_idx + 1 < total) app->collection_idx++;
                 }
             }
             if(key == InputKeyOk && is_act && total > 0) {
-                /* Selecting the active phantom is a no-op, just go back */
-                if(app->has_active && app->collection_idx == 0) {
-                    app->scene = SCENE_CAMP;
-                } else {
-                    uint8_t si = app->collection_idx - (app->has_active ? 1 : 0);
-                    Phantom selected = app->stored[si];
-                    if(app->has_active) {
-                        app->stored[si] = app->active_phantom;
+                if(app->collection_dismiss) {
+                    /* Dismiss mode: remove the selected phantom */
+                    if(app->has_active && app->collection_idx == 0) {
+                        /* Dismissing the active phantom */
+                        app->has_active = false;
                     } else {
+                        uint8_t si = app->collection_idx - (app->has_active ? 1 : 0);
                         memmove(&app->stored[si],
                                 &app->stored[si + 1],
                                 (app->stored_count - si - 1) * sizeof(Phantom));
                         app->stored_count--;
                     }
-                    app->active_phantom = selected;
-                    app->has_active = true;
+                    /* Adjust cursor if we were on the last item */
+                    total = app->stored_count + (app->has_active ? 1 : 0);
+                    if(app->collection_idx >= total && total > 0)
+                        app->collection_idx = total - 1;
+                    app->collection_dismiss = false;
                     app->pending_save = true;
-                    strncpy(app->message, "SET ACTIVE!", 32);
+                    strncpy(app->message, "DISMISSED!", 32);
                     app->message_timer = 60;
-                    app->scene = SCENE_CAMP;
+                } else {
+                    /* Set mode: existing set-as-active logic */
+                    if(app->has_active && app->collection_idx == 0) {
+                        app->scene = SCENE_CAMP;
+                    } else {
+                        uint8_t si = app->collection_idx - (app->has_active ? 1 : 0);
+                        Phantom selected = app->stored[si];
+                        if(app->has_active) {
+                            app->stored[si] = app->active_phantom;
+                        } else {
+                            memmove(&app->stored[si],
+                                    &app->stored[si + 1],
+                                    (app->stored_count - si - 1) * sizeof(Phantom));
+                            app->stored_count--;
+                        }
+                        app->active_phantom = selected;
+                        app->has_active = true;
+                        app->pending_save = true;
+                        strncpy(app->message, "SET ACTIVE!", 32);
+                        app->message_timer = 60;
+                        app->scene = SCENE_CAMP;
+                    }
                 }
             }
-            if(key == InputKeyBack && is_act) app->scene = SCENE_CAMP;
+            if(key == InputKeyBack && is_act) {
+                app->collection_dismiss = false;
+                app->scene = SCENE_CAMP;
+            }
             break;
         }
         default:
