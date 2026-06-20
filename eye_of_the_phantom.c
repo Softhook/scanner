@@ -519,7 +519,10 @@ static bool combat_resolve_turn(Combat* c, bool check_enemy_first,
         else                 { c->next_state = next_turn; }
     }
 
-    if(c->next_state == next_turn) return false;
+    if(c->next_state == next_turn) {
+        c->state = next_turn;
+        return false;
+    }
     c->delay_timer = COMBAT_DELAY_TICKS;
     c->state = COMBAT_DELAY;
     return true;
@@ -1132,79 +1135,47 @@ static void render_menu(Canvas* c, EyePhantomApp* app) {
 static void render_scan(Canvas* c, EyePhantomApp* app) {
     canvas_clear(c);
     uint32_t t = app->tick;
-    bool scanning = scan_is_any_active(app);
+    int cx = 64, cy = 32;
 
-    if(scanning) {
-        draw_str_centered(c, "SCANNING...", 3);
+    if(scan_is_any_active(app)) {
+        draw_str_centered(c, "SCANNING", 3);
 
-        /* --- Left: IR radar circles --- */
-        if(app->ir_running) {
-            int cx = 32, cy = 34;
-            for(int r = 1; r < 3; r++) {
-                int radius = ((t + r * 20) % 44) + 4;
-                if(radius < 22) canvas_draw_circle(c, cx, cy, radius);
-            }
-            draw_str(c, "IR", 10, 54);
-        } else {
-            draw_str(c, "IR", 10, 54);
-            canvas_draw_line(c, 22, 40, 42, 28);
+        /* Expanding radar rings — thick, pulsing outward from center */
+        for(int r = 1; r < 4; r++) {
+            int radius = ((t + r * 16) % 56) + 2;
+            if(radius >= 28) continue;
+            /* Thick ring: draw three adjacent circles */
+            canvas_draw_circle(c, cx, cy, radius);
+            canvas_draw_circle(c, cx, cy, radius + 1);
+            canvas_draw_circle(c, cx, cy, radius - 1);
         }
 
-        /* --- Right: NFC card detection indicator --- */
-        if(app->nfc_running) {
-            int cx = 96, cy = 34;
-            /* Card outline */
-            int card_w = 16, card_h = 22;
-            int card_x = cx - card_w / 2;
-            int card_y = cy - card_h / 2;
-            canvas_draw_frame(c, card_x, card_y, card_w, card_h);
-
-            /* Pulsing glow — expanding frame */
-            int pulse_off = ((t * 2) % 12);
-            if(pulse_off < 8) {
-                canvas_draw_frame(c, card_x - 1 - pulse_off, card_y - 1 - pulse_off,
-                                  card_w + 2 + pulse_off * 2, card_h + 2 + pulse_off * 2);
-            }
-
-            /* Inner chip lines */
-            canvas_draw_line(c, card_x + 4, card_y + 4, card_x + 8, card_y + 8);
-            canvas_draw_line(c, card_x + 4, card_y + 8, card_x + 8, card_y + 4);
-            canvas_draw_disc(c, cx, cy, 2);
-
-            draw_str(c, "NFC", 78, 54);
-        } else {
-            draw_str(c, "NFC", 78, 54);
-            /* Static card icon */
-            int cx = 96, cy = 34;
-            int card_w = 16, card_h = 22;
-            canvas_draw_frame(c, cx - card_w / 2, cy - card_h / 2, card_w, card_h);
-        }
-
-        /* Active indicator at bottom */
-        if(app->ir_running && app->nfc_running) {
-            draw_str_centered(c, "IR + NFC ACTIVE", 59);
-        } else if(app->ir_running) {
-            draw_str_centered(c, "IR ACTIVE", 59);
-        } else {
-            draw_str_centered(c, "NFC ACTIVE", 59);
-        }
+        /* Center dot */
+        canvas_draw_disc(c, cx, cy, 2);
     } else {
-        draw_str_centered(c, "IR & NFC SCAN", 4);
+        draw_str_centered(c, "SCAN", 4);
         canvas_draw_line(c, 0, 12, 127, 12);
 
-        /* IR icon (left) */
-        canvas_draw_circle(c, 32, 34, 8);
-        canvas_draw_disc(c, 32, 34, 4);
-        draw_str(c, "IR", 12, 48);
-
-        /* NFC icon (right) */
-        int ncx = 96, ncy = 34;
-        int nw = 16, nh = 22;
-        canvas_draw_frame(c, ncx - nw / 2, ncy - nh / 2, nw, nh);
-        canvas_draw_disc(c, ncx, ncy, 2);
-        canvas_draw_line(c, ncx - nw / 2 + 4, ncy - nh / 2 + 4,
-                         ncx - nw / 2 + 8, ncy - nh / 2 + 8);
-        draw_str(c, "NFC", 78, 48);
+        /* Simple radiating icon at center */
+        for(int i = 0; i < 8; i++) {
+            float angle = i * 3.14159f / 4.0f;
+            int ex = cx + (int)(cosf(angle) * 12);
+            int ey = cy + (int)(sinf(angle) * 12);
+            int bx = cx + (int)(cosf(angle) * 3);
+            int by = cy + (int)(sinf(angle) * 3);
+            if(abs(ex - bx) > abs(ey - by)) {
+                int x1 = (bx < ex) ? bx : ex;
+                int x2 = (bx > ex) ? bx : ex;
+                int y0 = (by + ey) / 2;
+                canvas_draw_box(c, x1, y0 - 1, x2 - x1 + 1, 3);
+            } else {
+                int y1 = (by < ey) ? by : ey;
+                int y2 = (by > ey) ? by : ey;
+                int x0 = (bx + ex) / 2;
+                canvas_draw_box(c, x0 - 1, y1, 3, y2 - y1 + 1);
+            }
+        }
+        canvas_draw_disc(c, cx, cy, 2);
 
         draw_str_centered(c, "POINT REMOTE OR TAP CARD", 56);
     }
@@ -1215,15 +1186,27 @@ static void render_summon(Canvas* c, EyePhantomApp* app) {
     Phantom* p = &app->pending_phantom;
 
     if(app->summon_reveal) {
-        app->reveal_timer++;
-        if(app->reveal_timer < 50) {
-            float progress = app->reveal_timer / 50.0f;
-            /* Noise reveal */
-            for(int y = 0; y < SCREEN_H; y++)
-                for(int x = 0; x < SCREEN_W; x++)
-                    if((prng_next() % 100) > progress * 70)
-                        if(prng_next() % 2) canvas_draw_dot(c, x, y);
-            draw_str_centered(c, "SIGNAL FOUND!", 28);
+        if(app->reveal_timer < 80) {
+            /* Phantom sprite at 3× scale — fills the centre */
+            #define SCALE 3
+            int spr_x = (SCREEN_W - PHANTOM_SPRITE_W * SCALE) / 2;
+            int spr_y = (SCREEN_H - PHANTOM_SPRITE_H * SCALE) / 2 - 4;
+            for(int row = 0; row < PHANTOM_SPRITE_H; row++) {
+                for(int col = 0; col < PHANTOM_SPRITE_W; col++) {
+                    if(p->sprite[row * 2 + col / 8] & (1 << (col % 8)))
+                        canvas_draw_box(c, spr_x + col * SCALE, spr_y + row * SCALE,
+                                        SCALE, SCALE);
+                }
+            }
+            #undef SCALE
+
+            /* "PHANTOM FOUND!" banner at bottom */
+            int msg_w = 14 * CHAR_W;
+            int msg_x = (SCREEN_W - msg_w) / 2;
+            canvas_draw_box(c, msg_x - 4, 54, msg_w + 8, 9);
+            canvas_invert_color(c);
+            draw_str_centered(c, "PHANTOM FOUND!", 55);
+            canvas_invert_color(c);
             return;
         }
         app->summon_reveal = false;
@@ -2024,7 +2007,7 @@ static void app_tick(void* context) {
     /* Summon reveal timer */
     if(app->scene == SCENE_SUMMON && app->summon_reveal) {
         app->reveal_timer++;
-        if(app->reveal_timer >= 50) {
+        if(app->reveal_timer >= 80) {
             app->summon_reveal = false;
         }
     }
