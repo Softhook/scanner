@@ -1,0 +1,1518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phantom Sprite Lab — Eye of the Phantom</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Share+Tech+Mono&display=swap');
+
+  :root {
+    --bg-dark: #0b0c10;
+    --bg-card: #1f2833;
+    --primary: #ff8200; /* Flipper Orange */
+    --primary-glow: rgba(255, 130, 0, 0.4);
+    --secondary: #9bbc0f; /* Retro LCD Green */
+    --secondary-glow: rgba(155, 188, 15, 0.4);
+    --text-main: #c5c6c7;
+    --text-bright: #ffffff;
+    --accent: #45f3ff;
+    --border: #3c4858;
+    --lcd-bg: #8ba80e;
+    --lcd-fg: #0f1c02;
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    font-family: 'Outfit', sans-serif;
+    min-height: 100vh;
+    padding: 40px 20px;
+    background-image: 
+      radial-gradient(at 10% 20%, rgba(255, 130, 0, 0.05) 0px, transparent 50%),
+      radial-gradient(at 90% 80%, rgba(69, 243, 255, 0.05) 0px, transparent 50%);
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+
+  h1 {
+    font-size: 2.8rem;
+    font-weight: 800;
+    color: var(--text-bright);
+    letter-spacing: -1px;
+    margin-bottom: 10px;
+    background: linear-gradient(45deg, var(--primary), var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    font-size: 1.1rem;
+    color: #8892b0;
+    font-weight: 300;
+  }
+
+  /* Grid Layout */
+  .grid-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+    margin-bottom: 40px;
+  }
+
+  @media (max-width: 1024px) {
+    .grid-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 30px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 4px;
+    background: linear-gradient(90deg, var(--primary), transparent);
+    opacity: 0.7;
+  }
+
+  .card.proposed::before {
+    background: linear-gradient(90deg, var(--accent), transparent);
+  }
+
+  .card-title {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .badge {
+    background-color: var(--primary);
+    color: #000;
+    font-size: 0.8rem;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-weight: 800;
+  }
+
+  .badge.proposed {
+    background-color: var(--accent);
+  }
+
+  /* Interactive Sprite Builder */
+  .builder-section {
+    display: flex;
+    gap: 30px;
+  }
+
+  @media (max-width: 768px) {
+    .builder-section {
+      flex-direction: column;
+    }
+  }
+
+  .preview-panels {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    align-items: center;
+  }
+
+  .canvas-container {
+    position: relative;
+    background-color: #12161f;
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  canvas.editor-canvas {
+    image-rendering: pixelated;
+    border: 1px solid #333;
+    display: block;
+    width: 256px;
+    height: 256px;
+    background-color: #000;
+    box-shadow: 0 0 20px rgba(0,0,0,0.6);
+  }
+
+  .canvas-labels {
+    width: 256px;
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 5px;
+  }
+
+  /* Flipper Screen Simulation */
+  .flipper-screen-sim {
+    background: #e49a34; /* Flipper orange plastic frame outline */
+    border-radius: 10px;
+    padding: 8px 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    border: 2px solid #b36400;
+    width: 280px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .lcd-glass {
+    background-color: var(--lcd-bg);
+    border: 3px solid #1a1f05;
+    padding: 4px;
+    border-radius: 4px;
+    box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+  }
+
+  .lcd-canvas {
+    display: block;
+    width: 240px;
+    height: 120px;
+    image-rendering: pixelated;
+  }
+
+  /* Selector Controls */
+  .controls-panel {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .control-group {
+    background-color: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 10px;
+    padding: 15px;
+  }
+
+  .control-group-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #8892b0;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .options-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+
+  .option-btn {
+    background-color: #171d26;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 5px;
+    color: var(--text-main);
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 600;
+    transition: all 0.2s;
+    text-align: center;
+    font-size: 0.85rem;
+  }
+
+  .option-btn:hover {
+    border-color: #888;
+    background-color: #1b222d;
+  }
+
+  .option-btn.selected {
+    border-color: var(--primary);
+    background-color: rgba(255, 130, 0, 0.1);
+    color: var(--text-bright);
+    box-shadow: 0 0 8px rgba(255, 130, 0, 0.2);
+  }
+
+  .card.proposed .option-btn.selected {
+    border-color: var(--accent);
+    background-color: rgba(69, 243, 255, 0.1);
+    box-shadow: 0 0 8px rgba(69, 243, 255, 0.2);
+  }
+
+  .current-formula {
+    background-color: #0f121a;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.9rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .current-formula span {
+    color: var(--primary);
+  }
+  .card.proposed .current-formula span {
+    color: var(--accent);
+  }
+
+  /* Compare & Export Section */
+  .tabs-container {
+    margin-bottom: 40px;
+  }
+
+  .tabs-header {
+    display: flex;
+    border-bottom: 2px solid var(--border);
+    margin-bottom: 20px;
+  }
+
+  .tab-btn {
+    background: none;
+    border: none;
+    color: var(--text-main);
+    padding: 12px 24px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+  }
+
+  .tab-btn:hover {
+    color: var(--text-bright);
+  }
+
+  .tab-btn.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+  }
+
+  .tab-content {
+    display: none;
+  }
+
+  .tab-content.active {
+    display: block;
+  }
+
+  /* Comparison list style */
+  .comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+  }
+
+  .comparison-table th, .comparison-table td {
+    padding: 15px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .comparison-table th {
+    font-weight: 600;
+    color: var(--text-bright);
+    background-color: rgba(255,255,255,0.02);
+  }
+
+  .part-desc {
+    font-size: 0.9rem;
+    color: #8892b0;
+  }
+
+  .highlight-classic {
+    color: #ff4d4d;
+    font-weight: 600;
+  }
+
+  .highlight-cute {
+    color: #22c55e;
+    font-weight: 600;
+  }
+
+  /* Code output styling */
+  .code-output-container {
+    position: relative;
+  }
+
+  .code-output {
+    background-color: #0b0d13;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.85rem;
+    color: #a9b2c3;
+    overflow-x: auto;
+    max-height: 500px;
+    white-space: pre;
+  }
+
+  .copy-btn {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    background-color: var(--primary);
+    border: none;
+    color: #000;
+    font-weight: 700;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+  }
+
+  .copy-btn:hover {
+    background-color: #ff9f33;
+    transform: translateY(-2px);
+  }
+
+  .copy-btn:active {
+    transform: translateY(0);
+  }
+
+  /* Matrix grid of all 64 creatures */
+  .matrix-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 15px;
+    margin-top: 20px;
+  }
+
+  .matrix-item {
+    background-color: #171d26;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .matrix-item:hover {
+    border-color: var(--primary);
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+
+  .matrix-item.active-combo {
+    border-color: var(--accent);
+    background-color: rgba(69, 243, 255, 0.05);
+  }
+
+  .matrix-canvas {
+    width: 48px;
+    height: 48px;
+    image-rendering: pixelated;
+    background: #000;
+    border-radius: 4px;
+    margin-bottom: 5px;
+  }
+
+  .matrix-label {
+    font-size: 0.65rem;
+    font-family: 'Share Tech Mono', monospace;
+    color: #8892b0;
+    text-align: center;
+  }
+
+  .toggle-matrix-btn {
+    background-color: #1f2833;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-main);
+    padding: 8px 16px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 600;
+    transition: all 0.2s;
+    margin-bottom: 20px;
+  }
+
+  .toggle-matrix-btn:hover {
+    border-color: var(--primary);
+    color: var(--text-bright);
+  }
+
+  .toggle-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 30px;
+  }
+
+  .set-toggle {
+    display: flex;
+    background-color: var(--bg-card);
+    border: 2px solid var(--border);
+    border-radius: 30px;
+    padding: 4px;
+    width: fit-content;
+  }
+
+  .toggle-btn {
+    background: none;
+    border: none;
+    padding: 10px 24px;
+    color: var(--text-main);
+    font-weight: 600;
+    border-radius: 25px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.3s;
+  }
+
+  .toggle-btn.active.classic {
+    background-color: var(--primary);
+    color: #000;
+    box-shadow: 0 4px 10px var(--primary-glow);
+  }
+
+  .toggle-btn.active.cute {
+    background-color: var(--accent);
+    color: #000;
+    box-shadow: 0 4px 10px rgba(69, 243, 255, 0.4);
+  }
+
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>👁 Phantom Sprite Lab</h1>
+    <div class="subtitle">Procedurally generated 16x16 modular sprites for Flipper Zero</div>
+  </header>
+
+  <div class="toggle-container">
+    <div class="set-toggle">
+      <button class="toggle-btn active classic" id="btn-toggle-classic" onclick="setSpriteSet('classic')">Classic Phantoms</button>
+      <button class="toggle-btn cute" id="btn-toggle-cute" onclick="setSpriteSet('cute')">Proposed Cute Set</button>
+    </div>
+  </div>
+
+  <div class="grid-layout">
+    <!-- Builder Card -->
+    <div class="card" id="main-editor-card">
+      <div class="card-title">
+        <span id="editor-set-name">Classic Sprite Set</span>
+        <span class="badge" id="editor-set-badge">Default</span>
+      </div>
+
+      <div class="builder-section">
+        <!-- Previews -->
+        <div class="preview-panels">
+          <div class="canvas-container">
+            <div style="font-size:0.8rem; color:#8892b0; font-weight:600; margin-bottom:8px;">Editor Canvas (16x16 scaled)</div>
+            <canvas class="editor-canvas" id="editor-canvas" width="16" height="16"></canvas>
+            <div class="canvas-labels">
+              <span>0,0</span>
+              <span>15,15</span>
+            </div>
+          </div>
+
+          <div class="canvas-container" style="background:#1d1d1d; border-color:#e49a34;">
+            <div style="font-size:0.8rem; color:#e49a34; font-weight:600; margin-bottom:8px;">Flipper Zero Screen Sim</div>
+            <div class="flipper-screen-sim">
+              <div class="lcd-glass">
+                <canvas class="lcd-canvas" id="lcd-canvas" width="128" height="64"></canvas>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls-panel">
+          <div class="current-formula">
+            <span>Formula:</span>
+            <div id="formula-display">Head 0 + Body 0 + Feet 0</div>
+          </div>
+
+          <!-- HEADS Selector -->
+          <div class="control-group">
+            <div class="control-group-title">
+              <span>1. Head (Rows 0-5)</span>
+              <span style="color:#666; font-size:0.75rem;">Y-Overlap: 4-5</span>
+            </div>
+            <div class="options-row" id="heads-selector">
+              <!-- Options populated dynamically -->
+            </div>
+          </div>
+
+          <!-- BODIES Selector -->
+          <div class="control-group">
+            <div class="control-group-title">
+              <span>2. Body (Rows 4-10)</span>
+              <span style="color:#666; font-size:0.75rem;">Y-Overlap: 4-5, 9-10</span>
+            </div>
+            <div class="options-row" id="bodies-selector">
+              <!-- Options populated dynamically -->
+            </div>
+          </div>
+
+          <!-- FEET Selector -->
+          <div class="control-group">
+            <div class="control-group-title">
+              <span>3. Feet (Rows 9-15)</span>
+              <span style="color:#666; font-size:0.75rem;">Y-Overlap: 9-10</span>
+            </div>
+            <div class="options-row" id="feet-selector">
+              <!-- Options populated dynamically -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Description & Design Critique Card -->
+    <div class="card proposed" id="critique-card">
+      <div class="card-title">
+        <span>Design Investigation</span>
+        <span class="badge proposed">Comparison</span>
+      </div>
+      <div style="font-size: 0.95rem; line-height: 1.6; display: flex; flex-direction: column; gap: 15px;">
+        <p>
+          We investigated the existing <strong>Phantom modular designs</strong> to see how they can be modified to feel cuter and more aligned with <strong>Pokémon-style</strong> visual motifs. 
+        </p>
+        <p>
+          The core issue with the <strong>Classic Set</strong> is that they are built with sharp, glitchy, and hollow shapes (like TV Static and Skull). The proposed <strong>Cute Set</strong> uses rounded silhouettes, prominent eyes with reflections (shiny pupils), sprouts/ears, chubby frames, and softer appendages (like mermaid tails and wheels).
+        </p>
+
+        <div style="background-color: rgba(255,255,255,0.02); border-radius: 8px; padding: 15px; border: 1px solid var(--border);">
+          <h4 style="color:var(--accent); margin-bottom:8px; font-weight:600;">How They Are More Distinctive</h4>
+          <ul style="padding-left: 20px; list-style-type: square; font-size: 0.9rem; color: #8892b0; display:flex; flex-direction:column; gap:6px;">
+            <li><strong>Silhouette Variety:</strong> Instead of simple shapes, heads vary between long pointed ears (Foxy), side gills (Axo), pointy wizard cowl (Ghosty), and leaf sprout (Sprout).</li>
+            <li><strong>Clear Eye Motifs:</strong> The classic set has hollow skulls or chaotic static. The cute set has solid 2x2 pupils, winks, and highlights that give immediate personality.</li>
+            <li><strong>Texture Contrast:</strong> The bodies vary between soft chubby curves, flared wings, fluffy cloud textures, and segmented checker shell lines.</li>
+            <li><strong>Movement Style:</strong> The feet represent different movement types: flat stubby paws (walking), side-slithering ghost trail (hovering), double-tipped mermaid fins (swimming), and rollers (gliding).</li>
+          </ul>
+        </div>
+
+        <p style="font-size: 0.9rem; color:#8892b0;">
+          Use the toggle at the top to preview either set. You can browse all 64 procedural combinations in the bottom drawer, click to edit them, and generate the C code on the fly.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabs Section -->
+  <div class="tabs-container">
+    <div class="tabs-header">
+      <button class="tab-btn active" onclick="switchTab('tab-comparison')">Comparison Table</button>
+      <button class="tab-btn" onclick="switchTab('tab-matrix')">Combinations Matrix (64 Phantoms)</button>
+      <button class="tab-btn" onclick="switchTab('tab-code')">Generated C Header</button>
+    </div>
+
+    <!-- TAB 1: Comparison Table -->
+    <div class="tab-content active" id="tab-comparison">
+      <div class="card">
+        <h3 style="color:#fff; margin-bottom: 15px;">Modular Part Design Breakdown</h3>
+        <table class="comparison-table">
+          <thead>
+            <tr>
+              <th style="width: 15%;">Part Type</th>
+              <th style="width: 20%;">Index</th>
+              <th style="width: 30%;">Classic (Halloween/Sci-Fi)</th>
+              <th style="width: 35%;">Proposed Cute (Pokémon-like)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>0 (Nec / Brawler)</td>
+              <td><span class="highlight-classic">Skull</span> — Hollow sockets, skeleton motif.</td>
+              <td><span class="highlight-cute">Foxy</span> — Pointed fox ears, big vertical eyes.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>1 (Sony / Defender)</td>
+              <td><span class="highlight-classic">Cyclops</span> — Oversized eye, cyber-gaze.</td>
+              <td><span class="highlight-cute">Axo</span> — Axolotl gills, cute blush marks & smile.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>2 (Samsung / Glitch)</td>
+              <td><span class="highlight-classic">Static</span> — Glitched retro CRT TV container.</td>
+              <td><span class="highlight-cute">Ghosty</span> — Wizard cowl/hood, mischievous ghost eyes.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>3 (RC5 / Other)</td>
+              <td><span class="highlight-classic">Crown</span> — Spiked crown, regal but sharp.</td>
+              <td><span class="highlight-cute">Sprout</span> — Leafy sprout budding from bulb head.</td>
+            </tr>
+            <tr>
+              <td colspan="4" style="background:#0b0c10; height:10px; padding:0;"></td>
+            </tr>
+            <tr>
+              <td><strong>Bodies</strong></td>
+              <td>0</td>
+              <td><span class="highlight-classic">Slime</span> — Rounded formless glob.</td>
+              <td><span class="highlight-cute">Chubby</span> — Fat round belly with tiny paws/hands.</td>
+            </tr>
+            <tr>
+              <td><strong>Bodies</strong></td>
+              <td>1</td>
+              <td><span class="highlight-classic">Mech</span> — Boxy frame with empty panels.</td>
+              <td><span class="highlight-cute">Winged</span> — Slender body with small flared wings.</td>
+            </tr>
+            <tr>
+              <td><strong>Bodies</strong></td>
+              <td>2</td>
+              <td><span class="highlight-classic">Beast</span> — Square torso with thick shoulders.</td>
+              <td><span class="highlight-cute">Fluffy</span> — Cloud mane/collar, fluffy ruff.</td>
+            </tr>
+            <tr>
+              <td><strong>Bodies</strong></td>
+              <td>3</td>
+              <td><span class="highlight-classic">Crystal</span> — Geometric diamond angles.</td>
+              <td><span class="highlight-cute">Shell</span> — Segmented turtle carapace shell pattern.</td>
+            </tr>
+            <tr>
+              <td colspan="4" style="background:#0b0c10; height:10px; padding:0;"></td>
+            </tr>
+            <tr>
+              <td><strong>Feet</strong></td>
+              <td>0</td>
+              <td><span class="highlight-classic">Claws</span> — Sharp claws extending outward.</td>
+              <td><span class="highlight-cute">Stubby</span> — Rounded chubby flat pads.</td>
+            </tr>
+            <tr>
+              <td><strong>Feet</strong></td>
+              <td>1</td>
+              <td><span class="highlight-classic">Hover</span> — Levitating bar with spark streaks.</td>
+              <td><span class="highlight-cute">Swirl</span> — Cute ghost tail swirl curved to side.</td>
+            </tr>
+            <tr>
+              <td><strong>Feet</strong></td>
+              <td>2</td>
+              <td><span class="highlight-classic">Tentacles</span> — Undulating ocean tendrils.</td>
+              <td><span class="highlight-cute">Fin</span> — Mermaid tail with double flukes.</td>
+            </tr>
+            <tr>
+              <td><strong>Feet</strong></td>
+              <td>3</td>
+              <td><span class="highlight-classic">Legs</span> — Blocky bipedal robot legs.</td>
+              <td><span class="highlight-cute">Rollers</span> — Circular toy-like wheel rollers.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 2: Combination Matrix -->
+    <div class="tab-content" id="tab-matrix">
+      <div class="card">
+        <h3 style="color:#fff; margin-bottom: 5px;">Procedural Combination Matrix (64 Creatures)</h3>
+        <p style="color:#8892b0; font-size:0.9rem; margin-bottom:20px;">
+          These are the 64 unique outcomes generated by combining parts. Click on any box to load it into the editor above.
+        </p>
+        <div class="matrix-grid" id="matrix-grid">
+          <!-- Populated dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: Code Exporter -->
+    <div class="tab-content" id="tab-code">
+      <div class="card">
+        <div class="code-output-container">
+          <button class="copy-btn" onclick="copyCode()">Copy Code</button>
+          <pre class="code-output" id="code-output"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ============================================================
+  // SPRITE DATA SETS
+  // ============================================================
+
+  const CLASSIC_HEADS = [
+    // 0: Skull
+    [
+      "................",
+      "....########....",
+      "...#........#...",
+      "..#..##..##..#..",
+      "..#..##..##..#..",
+      "...#...##...#..."
+    ],
+    // 1: Cyclops
+    [
+      "................",
+      ".....######.....",
+      "...##......##...",
+      "..#...####...#..",
+      "..#..######..#..",
+      "...##..##..##..."
+    ],
+    // 2: Static
+    [
+      "................",
+      "..############..",
+      "..#.#.##.#.#.#..",
+      "..##.#..#.##.#..",
+      "..#.##.##.#..#..",
+      "..############.."
+    ],
+    // 3: Crown
+    [
+      ".#...######...#.",
+      ".##.#......#.##.",
+      "..###......###..",
+      "...#..#..#..#...",
+      "...#..####..#...",
+      "...##########..."
+    ]
+  ];
+
+  const CLASSIC_BODIES = [
+    // 0: Slime
+    [
+      "................",
+      "....########....",
+      "...##########...",
+      "..############..",
+      "...##########...",
+      "....########....",
+      "...##......##..."
+    ],
+    // 1: Mech
+    [
+      "................",
+      "...##########...",
+      "...#..####..#...",
+      "...#.#....#.#...",
+      "...#..####..#...",
+      "...##########...",
+      "....#......#..."
+    ],
+    // 2: Beast
+    [
+      "................",
+      "..#..######..#..",
+      "..##.######.##..",
+      "...##########...",
+      "...##########...",
+      "....########....",
+      "....#......#..."
+    ],
+    // 3: Crystal
+    [
+      "................",
+      "......####......",
+      ".....##..##.....",
+      "....##....##....",
+      ".....##..##.....",
+      "......####......",
+      ".....#....#..."
+    ]
+  ];
+
+  const CLASSIC_FEET = [
+    // 0: Claws
+    [
+      "................",
+      "....#......#....",
+      "...##......##...",
+      "..###......###..",
+      ".##.#......#.##.",
+      "#...#......#...#",
+      "................"
+    ],
+    // 1: Hover
+    [
+      "................",
+      "....########....",
+      "................",
+      "..#..#..#..#.#..",
+      "................",
+      ".#.#.#..#.#.#...",
+      "................"
+    ],
+    // 2: Tentacles
+    [
+      "................",
+      "...#..#..#..#...",
+      "..#..#..#..#....",
+      "...#..#..#..#...",
+      "..#..#..#..#....",
+      ".#..#..#..#.....",
+      "................"
+    ],
+    // 3: Legs
+    [
+      "................",
+      "....##....##....",
+      "....##....##....",
+      "....##....##....",
+      "...##......###..",
+      "...###....###..",
+      "................"
+    ]
+  ];
+
+  const CUTE_HEADS = [
+    // 0: Foxy (pointed ears, vertical 2x2 eyes)
+    [
+      ".##.........##.",
+      ".###.......###.",
+      ".####.....####.",
+      "#...##...##...#",
+      "#..###...###..#",
+      ".#...######...#."
+    ],
+    // 1: Axo (Axolotl gills, cute eyes, smiley mouth)
+    [
+      "...##.....##...",
+      "..####...####..",
+      ".#############.",
+      "#..##.....##..#",
+      "#..##..#..##..#",
+      ".#############."
+    ],
+    // 2: Ghosty (Wizard cowl/hood, cute eyes)
+    [
+      ".......##.......",
+      "......####......",
+      ".....######.....",
+      "....#.#..#.#....",
+      "....#.####.#....",
+      "....########...."
+    ],
+    // 3: Sprout (Leafy sprout budding from bulb head)
+    [
+      "....#......#....",
+      ".....#....#.....",
+      "......####......",
+      "..##########..",
+      ".#..##..##..#.",
+      "..##########.."
+    ]
+  ];
+
+  const CUTE_BODIES = [
+    // 0: Chubby (paws on sides, round belly)
+    [
+      "................",
+      "....########....",
+      "..############..",
+      ".#.##########.#.",
+      "..############..",
+      "....########....",
+      "...##......##..."
+    ],
+    // 1: Winged (slender body with flared wings)
+    [
+      "................",
+      ".##..######..##.",
+      ".###.######.###.",
+      "..##.######.##..",
+      "....######......",
+      ".....######.....",
+      "....#......#...."
+    ],
+    // 2: Fluffy (cloud mane/ruff)
+    [
+      "................",
+      "...##########...",
+      ".##############.",
+      ".##############.",
+      "...##########...",
+      "....########....",
+      "...##......##..."
+    ],
+    // 3: Shell (segmented turtle shell pattern)
+    [
+      "................",
+      "....########....",
+      "..###.##.##.###..",
+      "..#.#.##.##.#.#..",
+      "..###.##.##.###..",
+      "....########....",
+      "...##......##..."
+    ]
+  ];
+
+  const CUTE_FEET = [
+    // 0: Stubby (chubby paws)
+    [
+      "................",
+      "...##......##...",
+      "..###......###..",
+      "..###......###..",
+      ".####......####.",
+      "..##........##..",
+      "................"
+    ],
+    // 1: Swirl (asymmetric ghost tail swirl)
+    [
+      "................",
+      "....########....",
+      ".....######.....",
+      "......####......",
+      ".......###......",
+      "........###.....",
+      ".........##....."
+    ],
+    // 2: Fin (mermaid fins)
+    [
+      "................",
+      "...##......##...",
+      "....##....##....",
+      ".....##..##.....",
+      "......####......",
+      "....########....",
+      "...##......##..."
+    ],
+    // 3: Rollers (toy-like wheel rollers)
+    [
+      "................",
+      "...##......##...",
+      "...##......##...",
+      "..####....####..",
+      ".##..##..##..##.",
+      "..####....####..",
+      "................"
+    ]
+  ];
+
+  const CLASSIC_NAMES = {
+    heads: ["Skull", "Cyclops", "Static", "Crown"],
+    bodies: ["Slime", "Mech", "Beast", "Crystal"],
+    feet: ["Claws", "Hover", "Tentacles", "Legs"]
+  };
+
+  const CUTE_NAMES = {
+    heads: ["Foxy", "Axo", "Ghosty", "Sprout"],
+    bodies: ["Chubby", "Winged", "Fluffy", "Shell"],
+    feet: ["Stubby", "Swirl", "Fin", "Rollers"]
+  };
+
+  // State
+  let currentSet = "classic"; // 'classic' or 'cute'
+  let selectedHead = 0;
+  let selectedBody = 0;
+  let selectedFeet = 0;
+
+  // DOM Elements
+  const editorCanvas = document.getElementById("editor-canvas");
+  const editorCtx = editorCanvas.getContext("2d");
+  const lcdCanvas = document.getElementById("lcd-canvas");
+  const lcdCtx = lcdCanvas.getContext("2d");
+  const headsSelector = document.getElementById("heads-selector");
+  const bodiesSelector = document.getElementById("bodies-selector");
+  const feetSelector = document.getElementById("feet-selector");
+  const formulaDisplay = document.getElementById("formula-display");
+  const codeOutput = document.getElementById("code-output");
+
+  // Get active arrays
+  function getParts() {
+    if (currentSet === "classic") {
+      return { heads: CLASSIC_HEADS, bodies: CLASSIC_BODIES, feet: CLASSIC_FEET, names: CLASSIC_NAMES };
+    } else {
+      return { heads: CUTE_HEADS, bodies: CUTE_BODIES, feet: CUTE_FEET, names: CUTE_NAMES };
+    }
+  }
+
+  // Draw 16x16 sprite composite
+  function compositeSprite(hIdx, bIdx, fIdx, partsList) {
+    const grid = Array.from({length: 16}, () => Array(16).fill(0));
+    const parts = [
+      { data: partsList.heads[hIdx], startRow: 0 },
+      { data: partsList.bodies[bIdx], startRow: 4 },
+      { data: partsList.feet[fIdx], startRow: 9 }
+    ];
+
+    for (const part of parts) {
+      for (let r = 0; r < part.data.length; r++) {
+        const row = part.startRow + r;
+        if (row >= 16) break;
+        const line = part.data[r];
+        for (let c = 0; c < 16; c++) {
+          if (line[c] === '#') {
+            grid[row][c] = 1;
+          }
+        }
+      }
+    }
+    return grid;
+  }
+
+  // Render on main editor canvas
+  function renderEditor() {
+    const partsList = getParts();
+    const grid = compositeSprite(selectedHead, selectedBody, selectedFeet, partsList);
+    
+    // Draw on editor canvas
+    editorCtx.fillStyle = "#000000";
+    editorCtx.fillRect(0, 0, 16, 16);
+
+    for (let r = 0; r < 16; r++) {
+      for (let c = 0; c < 16; c++) {
+        if (grid[r][c]) {
+          // Highlight colors depending on part source
+          let color = "#ffffff";
+          if (r < 4) color = "#ff9f33"; // Head area
+          else if (r < 9) {
+            // Overlap check
+            color = (r === 4 || r === 5) ? "#ffdf00" : "#45f3ff"; // Body area
+          } else {
+            // Feet area
+            color = (r === 9 || r === 10) ? "#a3f5a3" : "#22c55e"; 
+          }
+          editorCtx.fillStyle = color;
+          editorCtx.fillRect(c, r, 1, 1);
+        }
+      }
+    }
+
+    // Formula Display text
+    formulaDisplay.innerHTML = `Head ${selectedHead} (<span>${partsList.names.heads[selectedHead]}</span>) + Body ${selectedBody} (<span>${partsList.names.bodies[selectedBody]}</span>) + Feet ${selectedFeet} (<span>${partsList.names.feet[selectedFeet]}</span>)`;
+
+    renderLcdSim(grid, partsList);
+  }
+
+  // Draw simulated LCD screen of Flipper Zero (128x64 pixels)
+  function renderLcdSim(spriteGrid, partsList) {
+    lcdCtx.fillStyle = varColor("--lcd-bg");
+    lcdCtx.fillRect(0, 0, 128, 64);
+
+    const fgColor = varColor("--lcd-fg");
+
+    // Draw frame layout (from Flipper Zero HUD style)
+    lcdCtx.strokeStyle = fgColor;
+    lcdCtx.lineWidth = 1;
+    
+    // Top bar boundary line
+    lcdCtx.beginPath();
+    lcdCtx.moveTo(0, 11);
+    lcdCtx.lineTo(128, 11);
+    lcdCtx.stroke();
+
+    // Menu layout boxes
+    lcdCtx.beginPath();
+    lcdCtx.moveTo(0, 48);
+    lcdCtx.lineTo(128, 48);
+    lcdCtx.stroke();
+
+    // Center matchup area
+    lcdCtx.beginPath();
+    lcdCtx.moveTo(42, 11);
+    lcdCtx.lineTo(42, 48);
+    lcdCtx.moveTo(86, 11);
+    lcdCtx.lineTo(86, 48);
+    lcdCtx.stroke();
+
+    // Draw Player sprite on left
+    drawSpriteOnLcd(spriteGrid, 12, 20, fgColor);
+
+    // Draw a mock corrupted enemy sprite on right
+    // Let's use mirror-ish or static classic sprite
+    const enemyParts = (currentSet === 'classic') ? getParts() : { heads: CLASSIC_HEADS, bodies: CLASSIC_BODIES, feet: CLASSIC_FEET };
+    const enemyGrid = compositeSprite(3, 2, 0, enemyParts); // Crown + Beast + Claws
+    drawSpriteOnLcd(enemyGrid, 100, 20, fgColor);
+
+    // Text labels (pixelated style font rendering via standard canvas text for simplicity but matching positions)
+    lcdCtx.fillStyle = fgColor;
+    lcdCtx.font = "bold 8px Courier New";
+    lcdCtx.fillText("HP 45/45", 2, 8);
+    lcdCtx.fillText("HP 60/60", 82, 8);
+
+    // Combat labels
+    lcdCtx.fillText("BRL", 5, 42);
+    lcdCtx.fillText("DEF", 108, 42);
+
+    lcdCtx.fillText(">> ADV >>", 44, 25);
+    lcdCtx.fillText("Lv.3", 56, 35);
+
+    // Action menu choices
+    lcdCtx.font = "bold 6px Courier New";
+    lcdCtx.fillText("[STRIKE]", 4, 56);
+    lcdCtx.fillText(" SURGE ", 68, 56);
+    lcdCtx.fillText(" GUARD  ", 4, 62);
+    lcdCtx.fillText(" REVERSE", 68, 62);
+  }
+
+  function drawSpriteOnLcd(grid, x, y, color) {
+    lcdCtx.fillStyle = color;
+    for (let r = 0; r < 16; r++) {
+      for (let c = 0; c < 16; c++) {
+        if (grid[r][c]) {
+          lcdCtx.fillRect(x + c, y + r, 1, 1);
+        }
+      }
+    }
+  }
+
+  function varColor(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  // Populate selection controls
+  function populateControls() {
+    const partsList = getParts();
+    
+    headsSelector.innerHTML = "";
+    bodiesSelector.innerHTML = "";
+    feetSelector.innerHTML = "";
+
+    partsList.names.heads.forEach((name, idx) => {
+      headsSelector.appendChild(createOptionBtn("head", idx, name, selectedHead === idx));
+    });
+    partsList.names.bodies.forEach((name, idx) => {
+      bodiesSelector.appendChild(createOptionBtn("body", idx, name, selectedBody === idx));
+    });
+    partsList.names.feet.forEach((name, idx) => {
+      feetSelector.appendChild(createOptionBtn("feet", idx, name, selectedFeet === idx));
+    });
+  }
+
+  function createOptionBtn(type, idx, name, isSelected) {
+    const btn = document.createElement("button");
+    btn.className = `option-btn ${isSelected ? "selected" : ""}`;
+    btn.innerText = name;
+    btn.onclick = () => {
+      if (type === "head") selectedHead = idx;
+      else if (type === "body") selectedBody = idx;
+      else if (type === "feet") selectedFeet = idx;
+
+      // Update button selection visual
+      const parent = btn.parentElement;
+      Array.from(parent.children).forEach(child => child.classList.remove("selected"));
+      btn.classList.add("selected");
+
+      renderEditor();
+      updateActiveComboMatrix();
+    };
+    return btn;
+  }
+
+  // Sprite set toggle
+  function setSpriteSet(set) {
+    currentSet = set;
+    
+    document.getElementById("btn-toggle-classic").className = `toggle-btn ${set === "classic" ? "active classic" : ""}`;
+    document.getElementById("btn-toggle-cute").className = `toggle-btn ${set === "cute" ? "active cute" : ""}`;
+
+    const cardHeader = document.getElementById("editor-set-name");
+    const cardBadge = document.getElementById("editor-set-badge");
+    const mainCard = document.getElementById("main-editor-card");
+
+    if (set === "classic") {
+      cardHeader.innerText = "Classic Sprite Set";
+      cardBadge.innerText = "Default";
+      cardBadge.className = "badge";
+      mainCard.classList.remove("proposed");
+    } else {
+      cardHeader.innerText = "Proposed Cute Set";
+      cardBadge.innerText = "Cute/Pokemon";
+      cardBadge.className = "badge proposed";
+      mainCard.classList.add("proposed");
+    }
+
+    populateControls();
+    renderEditor();
+    generateMatrix();
+    updateCodeText();
+  }
+
+  // Switch tabs
+  function switchTab(tabId) {
+    document.querySelectorAll(".tab-btn").forEach(btn => {
+      btn.classList.remove("active");
+    });
+    document.querySelectorAll(".tab-content").forEach(content => {
+      content.classList.remove("active");
+    });
+
+    event.currentTarget.classList.add("active");
+    document.getElementById(tabId).classList.add("active");
+
+    if (tabId === 'tab-matrix') {
+      generateMatrix();
+    }
+  }
+
+  // Generate Matrix of all 64 creatures
+  function generateMatrix() {
+    const matrixGrid = document.getElementById("matrix-grid");
+    matrixGrid.innerHTML = "";
+
+    const partsList = getParts();
+
+    for (let h = 0; h < 4; h++) {
+      for (let b = 0; b < 4; b++) {
+        for (let f = 0; f < 4; f++) {
+          const item = document.createElement("div");
+          item.className = `matrix-item ${h===selectedHead && b===selectedBody && f===selectedFeet ? 'active-combo' : ''}`;
+          item.id = `combo-${h}-${b}-${f}`;
+
+          const cv = document.createElement("canvas");
+          cv.className = "matrix-canvas";
+          cv.width = 16;
+          cv.height = 16;
+          const ctx = cv.getContext("2d");
+          
+          const grid = compositeSprite(h, b, f, partsList);
+          ctx.fillStyle = "#000000";
+          ctx.fillRect(0, 0, 16, 16);
+          ctx.fillStyle = (currentSet === 'classic') ? "#ff8200" : "#45f3ff";
+          for (let r = 0; r < 16; r++) {
+            for (let c = 0; c < 16; c++) {
+              if (grid[r][c]) ctx.fillRect(c, r, 1, 1);
+            }
+          }
+
+          const label = document.createElement("div");
+          label.className = "matrix-label";
+          label.innerText = `${h}${b}${f}\n${partsList.names.heads[h].substring(0,4)}-${partsList.names.bodies[b].substring(0,4)}`;
+
+          item.appendChild(cv);
+          item.appendChild(label);
+          
+          item.onclick = () => {
+            selectedHead = h;
+            selectedBody = b;
+            selectedFeet = f;
+            populateControls();
+            renderEditor();
+            updateActiveComboMatrix();
+          };
+
+          matrixGrid.appendChild(item);
+        }
+      }
+    }
+  }
+
+  function updateActiveComboMatrix() {
+    document.querySelectorAll(".matrix-item").forEach(item => {
+      item.classList.remove("active-combo");
+    });
+    const activeItem = document.getElementById(`combo-${selectedHead}-${selectedBody}-${selectedFeet}`);
+    if (activeItem) {
+      activeItem.classList.add("active-combo");
+    }
+  }
+
+  // Convert array of string rows to C hex format array
+  function formatPartToCHex(partName, partData) {
+    let result = `/*  ---- ${partName} ----\n`;
+    for(let r = 0; r < partData.length; r++) {
+      result += ` *  ${partData[r]}\n`;
+    }
+    result += ` */\n`;
+    result += `static const uint8_t ${partName.toLowerCase().replace(/\s+/g, '_').replace(/[:()]/g, '')}[PHANTOM_SPRITE_BYTES] = {\n`;
+    
+    // We have 16 rows.
+    // Heads have active rows 0-5.
+    // Bodies have active rows 4-10.
+    // Feet have active rows 9-15.
+    // We need to output all 16 rows, padded with 0x00, 0x00.
+    let startRow = 0;
+    if (partName.includes("Body")) startRow = 4;
+    else if (partName.includes("Feet")) startRow = 9;
+
+    for (let r = 0; r < 16; r++) {
+      let b0 = 0;
+      let b1 = 0;
+      
+      const partRow = r - startRow;
+      if (partRow >= 0 && partRow < partData.length) {
+        const line = partData[partRow];
+        // Byte 0 (bits 0-7 = col 0-7 LSB first)
+        for (let bit = 0; bit < 8; bit++) {
+          if (line[bit] === '#') {
+            b0 |= (1 << bit);
+          }
+        }
+        // Byte 1 (bits 0-7 = col 8-15 LSB first)
+        for (let bit = 0; bit < 8; bit++) {
+          if (line[bit + 8] === '#') {
+            b1 |= (1 << bit);
+          }
+        }
+      }
+
+      const hex0 = "0x" + b0.toString(16).toUpperCase().padStart(2, "0");
+      const hex1 = "0x" + b1.toString(16).toUpperCase().padStart(2, "0");
+      result += `    ${hex0},${hex1}, /* row ${r.toString().padStart(2, " ")} */\n`;
+    }
+    result += `};\n`;
+    return result;
+  }
+
+  // Update C Code tab content
+  function updateCodeText() {
+    const partsList = getParts();
+    let code = `/**\n`;
+    code += ` * phantom_sprites.h — Eye of the Phantom\n`;
+    code += ` * Generated dynamically via Phantom Sprite Lab (${currentSet === 'classic' ? 'Classic' : 'Cute'} Set)\n`;
+    code += ` */\n\n`;
+    code += `#ifndef PHANTOM_SPRITES_H\n`;
+    code += `#define PHANTOM_SPRITES_H\n\n`;
+    code += `#include <stdint.h>\n`;
+    code += `#include <string.h>\n\n`;
+    code += `#define PHANTOM_SPRITE_W      16\n`;
+    code += `#define PHANTOM_SPRITE_H      16\n`;
+    code += `#define PHANTOM_SPRITE_BYTES  32\n\n`;
+    code += `#define PHANTOM_HEAD_COUNT    4\n`;
+    code += `#define PHANTOM_BODY_COUNT    4\n`;
+    code += `#define PHANTOM_FEET_COUNT    4\n\n`;
+
+    code += `/* ================================================================\n`;
+    code += ` * HEAD PARTS (active rows 0–5)\n`;
+    code += ` * ================================================================ */\n\n`;
+    partsList.heads.forEach((data, i) => {
+      code += formatPartToCHex(`Head ${i}: ${partsList.names.heads[i]}`, data) + "\n";
+    });
+
+    code += `/* ================================================================\n`;
+    code += ` * BODY PARTS (active rows 4–10)\n`;
+    code += ` * ================================================================ */\n\n`;
+    partsList.bodies.forEach((data, i) => {
+      code += formatPartToCHex(`Body ${i}: ${partsList.names.bodies[i]}`, data) + "\n";
+    });
+
+    code += `/* ================================================================\n`;
+    code += ` * FEET PARTS (active rows 9–15)\n`;
+    code += ` * ================================================================ */\n\n`;
+    partsList.feet.forEach((data, i) => {
+      code += formatPartToCHex(`Feet ${i}: ${partsList.names.feet[i]}`, data) + "\n";
+    });
+
+    code += `/* ================================================================\n`;
+    code += ` * LOOKUP TABLES\n`;
+    code += ` * ================================================================ */\n\n`;
+
+    code += `static const uint8_t* const phantom_heads[PHANTOM_HEAD_COUNT] = {\n`;
+    for(let i=0; i<4; i++) {
+      code += `    phantom_head_${partsList.names.heads[i].toLowerCase()},\n`;
+    }
+    code += `};\n\n`;
+
+    code += `static const uint8_t* const phantom_bodies[PHANTOM_BODY_COUNT] = {\n`;
+    for(let i=0; i<4; i++) {
+      code += `    phantom_body_${partsList.names.bodies[i].toLowerCase()},\n`;
+    }
+    code += `};\n\n`;
+
+    code += `static const uint8_t* const phantom_feet_parts[PHANTOM_FEET_COUNT] = {\n`;
+    for(let i=0; i<4; i++) {
+      code += `    phantom_feet_${partsList.names.feet[i].toLowerCase()},\n`;
+    }
+    code += `};\n\n`;
+
+    code += `static const char* const phantom_head_names[PHANTOM_HEAD_COUNT] = {\n`;
+    for(let i=0; i<4; i++) {
+      code += `    "${partsList.names.heads[i]}",\n`;
+    }
+    code += `};\n\n`;
+
+    code += `static const char* const phantom_body_names[PHANTOM_BODY_COUNT] = {\n`;
+    for(let i=0; i<4; i++) {
+      code += `    "${partsList.names.bodies[i]}",\n`;
+    }
+    code += `};\n\n`;
+
+    code += `static const char* const phantom_feet_names[PHANTOM_FEET_COUNT] = {\n`;
+    for(let i=0; i<4; i++) {
+      code += `    "${partsList.names.feet[i]}",\n`;
+    }
+    code += `};\n\n`;
+
+    code += `/* ================================================================\n`;
+    code += ` * COMPOSITOR\n`;
+    code += ` * ================================================================ */\n\n`;
+    code += `static inline void phantom_sprite_composite(\n`;
+    code += `    uint8_t* output,\n`;
+    code += `    uint8_t  head_idx,\n`;
+    code += `    uint8_t  body_idx,\n`;
+    code += `    uint8_t  feet_idx)\n`;
+    code += `{\n`;
+    code += `    const uint8_t* head = phantom_heads[head_idx % PHANTOM_HEAD_COUNT];\n`;
+    code += `    const uint8_t* body = phantom_bodies[body_idx % PHANTOM_BODY_COUNT];\n`;
+    code += `    const uint8_t* feet = phantom_feet_parts[feet_idx % PHANTOM_FEET_COUNT];\n\n`;
+    code += `    for(uint8_t i = 0; i < PHANTOM_SPRITE_BYTES; i++) {\n`;
+    code += `        output[i] = head[i] | body[i] | feet[i];\n`;
+    code += `    }\n`;
+    code += `}\n\n`;
+
+    code += `static inline void phantom_sprite_invert(uint8_t* sprite) {\n`;
+    code += `    for(uint8_t i = 0; i < PHANTOM_SPRITE_BYTES; i++) {\n`;
+    code += `        sprite[i] = ~sprite[i];\n`;
+    code += `    }\n`;
+    code += `}\n\n`;
+
+    code += `static inline void phantom_sprite_indices_from_address(\n`;
+    code += `    uint16_t address,\n`;
+    code += `    uint8_t* head_idx,\n`;
+    code += `    uint8_t* body_idx,\n`;
+    code += `    uint8_t* feet_idx)\n`;
+    code += `{\n`;
+    code += `    *head_idx = address & 0x03;\n`;
+    code += `    *body_idx = (address >> 2) & 0x03;\n`;
+    code += `    *feet_idx = (address >> 4) & 0x03;\n`;
+    code += `    // Ensure safety bounds mapping if count increases\n`;
+    code += `}\n\n`;
+
+    code += `#endif /* PHANTOM_SPRITES_H */\n`;
+
+    codeOutput.innerText = code;
+  }
+
+  function copyCode() {
+    navigator.clipboard.writeText(codeOutput.innerText);
+    const copyBtn = document.querySelector(".copy-btn");
+    copyBtn.innerText = "Copied!";
+    setTimeout(() => {
+      copyBtn.innerText = "Copy Code";
+    }, 2000);
+  }
+
+  // Initialize
+  populateControls();
+  renderEditor();
+  updateCodeText();
+
+</script>
+</body>
+</html>
