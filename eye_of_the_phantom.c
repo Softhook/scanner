@@ -53,12 +53,12 @@ typedef enum {
     SCENE_CAMP,
     SCENE_UPGRADE,
     SCENE_COLLECTION,
+    SCENE_INFO,
 } Scene;
 
 typedef enum {
     CLASS_BRAWLER,
     CLASS_DEFENDER,
-    CLASS_TECHNICIAN,
     CLASS_GLITCH,
 } PhantomClass;
 
@@ -162,20 +162,26 @@ typedef struct {
     bool        summon_reveal;
     uint8_t     reveal_timer;
     bool        running;
+    /* Persistent combat — keep damaged enemy between phantom swaps */
+    bool        has_saved_combat;
+    Phantom     saved_enemy_phantom;
+    int16_t     saved_enemy_hp;
+    int16_t     saved_enemy_heat;
+    bool        saved_enemy_overloaded;
+    uint16_t    saved_combat_floor;
 } EyePhantomApp;
 
 /* ================================================================
  * PROTOCOL / CLASS DATA
  * ================================================================ */
 
-static const char* CLASS_NAMES[] = {"BRAWLER","DEFENDER","TECHNICIAN","GLITCH"};
+static const char* CLASS_NAMES[] = {"BRAWLER","DEFENDER","GLITCH"};
 static const char* PROTO_NAMES[] = {"NEC","SONY","SAMSUNG","RC5"};
 
 static const struct { float hp, atk, def, spd; } CLASS_BIAS[] = {
-    {1.1, 1.4, 0.9, 0.7},  /* BRAWLER   */
-    {1.3, 0.7, 1.4, 0.8},  /* DEFENDER  */
-    {1.0, 1.0, 1.0, 1.1},  /* TECHNICIAN*/
-    {0.7, 1.3, 0.6, 1.5},  /* GLITCH    */
+    {1.2, 1.5, 0.8, 0.7},  /* BRAWLER   */
+    {1.4, 0.7, 1.5, 0.8},  /* DEFENDER  */
+    {0.7, 1.1, 0.6, 1.6},  /* GLITCH    */
 };
 
 static const char* SYL1[] = {"ZAR","NEX","VOL","KRI","PHA","DRE","MOX","SYN",
@@ -218,7 +224,13 @@ static void phantom_build_sprite(Phantom* p) {
 
 static void phantom_generate(Phantom* p, SignalProtocol proto,
                               uint32_t address, uint32_t command) {
-    PhantomClass cls = (PhantomClass)(proto);  /* proto 0-3 maps to class 0-3 */
+    PhantomClass cls;
+    switch(proto) {
+        case PROTO_NEC:     cls = CLASS_BRAWLER;  break;
+        case PROTO_SONY:    cls = CLASS_DEFENDER;  break;
+        case PROTO_SAMSUNG: cls = CLASS_GLITCH;    break;
+        default:            cls = (PhantomClass)((address + command) % 3); break;
+    }
 
     uint32_t seed = command & 0xFF;
     int16_t base_hp  = 30 + (seed % 20);
@@ -262,7 +274,7 @@ static void phantom_get_effective(const Phantom* p, int16_t* hp, int16_t* atk,
 
 static void phantom_generate_enemy(Phantom* p, uint16_t floor) {
     prng_seed(floor * 2654435761u);
-    uint8_t pi = prng_next() % 4;
+    uint8_t pi = prng_next() % 3;
     SignalProtocol proto = (SignalProtocol)pi;
     uint32_t addr = prng_next() & 0xFF;
     uint32_t cmd  = prng_next() & 0xFF;
@@ -290,70 +302,137 @@ static void phantom_generate_enemy(Phantom* p, uint16_t floor) {
  * COMBAT ENGINE
  * ================================================================ */
 
-static void combat_start(EyePhantomApp* app) {
-    Combat* c = &app->combat;
-    Phantom* enemy = malloc(sizeof(Phantom));
-    phantom_generate_enemy(enemy, app->current_floor);
-
-    /* Player */
-    c->player.phantom = app->active_phantom;
-    int16_t hp, atk, def, spd;
-    phantom_get_effective(&app->active_phantom, &hp, &atk, &def, &spd);
-    c->player.hp     = hp;
-    c->player.max_hp  = hp;
-    c->player.heat   = 0;
-    c->player.overloaded = false;
-    c->player.defending  = false;
-    c->player.stats.hp  = hp;
-    c->player.stats.atk = atk;
-    c->player.stats.def = def;
-    c->player.stats.spd = spd;
-
-    /* Enemy */
-    c->enemy.phantom = *enemy;
-    phantom_get_effective(enemy, &hp, &atk, &def, &spd);
-    c->enemy.hp     = hp;
-    c->enemy.max_hp  = hp;
-    c->enemy.heat   = 0;
-    c->enemy.overloaded = false;
-    c->enemy.defending  = false;
-    c->enemy.stats.hp  = hp;
-    c->enemy.stats.atk = atk;
-    c->enemy.stats.def = def;
-    c->enemy.stats.spd = spd;
-
-    free(enemy);
-
-    c->state = COMBAT_PLAYER_TURN;
-    c->floor = app->current_floor;
-    snprintf(c->log, COMBAT_LOG_LEN, "FLOOR %u - FIGHT!", app->current_floor);
-    app->cursor = 0;
+/* Class advantage: BRAWLER>GLITCH>DEFENDER>BRAWLER */
+static float combat_class_advantage(PhantomClass attacker, PhantomClass defender) {
+    if((attacker == CLASS_BRAWLER  && defender == CLASS_GLITCH)   ||
+       (attacker == CLASS_GLITCH   && defender == CLASS_DEFENDER) ||
+       (attacker == CLASS_DEFENDER && defender == CLASS_BRAWLER)) {
+        return 1.3f;
+    }
+    if((attacker == CLASS_GLITCH   && defender == CLASS_BRAWLER)  ||
+       (attacker == CLASS_DEFENDER && defender == CLASS_GLITCH)   ||
+       (attacker == CLASS_BRAWLER  && defender == CLASS_DEFENDER)) {
+        return 0.8f;
+    }
+    return 1.0f;
 }
 
-static int16_t combat_calc_damage(CombatUnit* attacker, CombatUnit* defender,
-                                   bool is_skill, bool* out_crit) {
-    int16_t base = attacker->stats.atk - defender->stats.def / 2;
-    if(base < 1) base = 1;
-    if(is_skill) base = base * 3 / 2;
+static void combat_init_unit(CombatUnit* unit, Phantom* phantom) {
+    unit->phantom = *phantom;
+    int16_t hp, atk, def, spd;
+    phantom_get_effective(phantom, &hp, &atk, &def, &spd);
+    unit->hp         = hp;
+    unit->max_hp     = hp;
+    unit->heat       = 0;
+    unit->overloaded = false;
+    unit->defending  = false;
+    unit->stats.hp   = hp;
+    unit->stats.atk  = atk;
+    unit->stats.def  = def;
+    unit->stats.spd  = spd;
+}
 
-    /* Crit check: SPD * 2 / 100, capped at 30% */
+static void combat_start(EyePhantomApp* app) {
+    Combat* c = &app->combat;
+
+    /* Check for a saved (damaged) enemy on this floor */
+    if(app->has_saved_combat && app->saved_combat_floor == app->current_floor) {
+        combat_init_unit(&c->player, &app->active_phantom);
+
+        /* Restore saved enemy */
+        c->enemy.phantom = app->saved_enemy_phantom;
+        int16_t hp, atk, def, spd;
+        phantom_get_effective(&app->saved_enemy_phantom, &hp, &atk, &def, &spd);
+        c->enemy.max_hp     = hp;
+        c->enemy.hp         = app->saved_enemy_hp;
+        c->enemy.heat       = app->saved_enemy_heat;
+        c->enemy.overloaded = app->saved_enemy_overloaded;
+        c->enemy.defending  = false;
+        c->enemy.stats.hp   = hp;
+        c->enemy.stats.atk  = atk;
+        c->enemy.stats.def  = def;
+        c->enemy.stats.spd  = spd;
+
+        app->has_saved_combat = false;
+        c->floor = app->current_floor;
+        app->cursor = 0;
+
+        /* SPD-based turn order */
+        if(c->enemy.stats.spd > c->player.stats.spd) {
+            c->state = COMBAT_ENEMY_TURN;
+            snprintf(c->log, COMBAT_LOG_LEN, "F%u REMATCH-FOE FAST", app->current_floor);
+        } else {
+            c->state = COMBAT_PLAYER_TURN;
+            snprintf(c->log, COMBAT_LOG_LEN, "F%u - REMATCH!", app->current_floor);
+        }
+        return;
+    }
+
+    Phantom enemy;
+    phantom_generate_enemy(&enemy, app->current_floor);
+
+    combat_init_unit(&c->player, &app->active_phantom);
+    combat_init_unit(&c->enemy, &enemy);
+
+    app->has_saved_combat = false;
+    c->floor = app->current_floor;
+    app->cursor = 0;
+
+    /* SPD-based turn order */
+    if(c->enemy.stats.spd > c->player.stats.spd) {
+        c->state = COMBAT_ENEMY_TURN;
+        snprintf(c->log, COMBAT_LOG_LEN, "F%u - FOE IS FASTER!", app->current_floor);
+    } else {
+        c->state = COMBAT_PLAYER_TURN;
+        snprintf(c->log, COMBAT_LOG_LEN, "F%u - FIGHT!", app->current_floor);
+    }
+}
+
+/* action_type: 0=strike(1.0x), 1=surge(1.5x), 3=reverse(0.3x) */
+static int16_t combat_calc_damage(CombatUnit* attacker, CombatUnit* defender,
+                                   uint8_t action_type, bool* out_crit) {
+    int32_t base;
+    if(action_type == 1) {
+        base = (int32_t)attacker->stats.atk * 3 / 2;     /* Surge: 1.5x */
+    } else if(action_type == 3) {
+        base = (int32_t)attacker->stats.atk * 3 / 10;    /* Reverse: 0.3x */
+        if(base < 1) base = 1;
+    } else {
+        base = (int32_t)attacker->stats.atk;              /* Strike: 1.0x */
+    }
+
+    /* Flat DEF reduction (DEF/3) */
+    base = base - defender->stats.def / 3;
+    if(base < 1) base = 1;
+
+    /* Class advantage multiplier */
+    float advantage = combat_class_advantage(
+        attacker->phantom.cls, defender->phantom.cls);
+    base = (int32_t)(base * advantage);
+    if(base < 1) base = 1;
+
+    /* Crit check: SPD * 2 / 100, capped at 25% */
     uint8_t crit_chance = attacker->stats.spd * 2;
-    if(crit_chance > 30) crit_chance = 30;
+    if(crit_chance > 25) crit_chance = 25;
     bool crit = (prng_next() % 100) < crit_chance;
     if(crit) base = base * 9 / 5;
 
     if(out_crit) *out_crit = crit;
 
     /* ±15% variance */
-    int16_t variance = 85 + (prng_next() % 30);
-    int16_t dmg = base * variance / 100;
+    int32_t variance = 85 + (prng_next() % 31);
+    int32_t dmg = base * variance / 100;
     if(dmg < 1) dmg = 1;
-    return dmg;
+    if(dmg > 30000) dmg = 30000;
+    return (int16_t)dmg;
 }
 
 static void combat_player_action(EyePhantomApp* app, uint8_t action) {
     Combat* c = &app->combat;
     if(c->state != COMBAT_PLAYER_TURN) return;
+
+    c->player.defending = false;
+    int16_t spd_reduce = c->player.stats.spd / 2;
 
     if(c->player.overloaded) {
         snprintf(c->log, COMBAT_LOG_LEN, "OVERLOADED!");
@@ -361,32 +440,59 @@ static void combat_player_action(EyePhantomApp* app, uint8_t action) {
         c->player.heat = c->player.heat > 50 ? c->player.heat - 50 : 0;
     } else {
         switch(action) {
-            case 0: { /* ATK */
+            case 0: { /* STRIKE */
                 bool crit;
-                int16_t dmg = combat_calc_damage(&c->player, &c->enemy, false, &crit);
+                int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 0, &crit);
+                if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
                 c->enemy.hp -= dmg;
-                c->player.heat += 20;
-                snprintf(c->log, COMBAT_LOG_LEN, "ATK: %d%s", dmg, crit ? " CRIT!" : "");
+                int16_t heat = 20 - spd_reduce;
+                if(heat < 0) heat = 0;
+                c->player.heat += heat;
+                snprintf(c->log, COMBAT_LOG_LEN, "STRIKE:%d%s", dmg, crit ? " CRIT!" : "");
                 break;
             }
-            case 1: { /* BURST */
+            case 1: { /* SURGE */
                 bool crit;
-                int16_t dmg = combat_calc_damage(&c->player, &c->enemy, true, &crit);
+                int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 1, &crit);
+                if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
                 c->enemy.hp -= dmg;
-                c->player.heat += 35;
-                snprintf(c->log, COMBAT_LOG_LEN, "BURST: %d%s", dmg, crit ? " CRIT!" : "");
+                int16_t heat = 35 - spd_reduce;
+                if(heat < 0) heat = 0;
+                c->player.heat += heat;
+                snprintf(c->log, COMBAT_LOG_LEN, "SURGE:%d%s", dmg, crit ? " CRIT!" : "");
                 break;
             }
-            case 2: { /* DEF */
+            case 2: { /* GUARD */
                 c->player.heat = c->player.heat > 30 ? c->player.heat - 30 : 0;
                 c->player.defending = true;
-                snprintf(c->log, COMBAT_LOG_LEN, "DEFEND! -30 HEAT");
+                snprintf(c->log, COMBAT_LOG_LEN, "GUARD! -30 HEAT");
+                break;
+            }
+            case 3: { /* REVERSE */
+                bool crit;
+                int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 3, &crit);
+                if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
+                c->enemy.hp -= dmg;
+                int16_t heat = 10 - spd_reduce;
+                if(heat < 0) heat = 0;
+                c->player.heat += heat;
+                c->enemy.heat += 20;
+                /* Check enemy overload from heat transfer */
+                if(c->enemy.heat >= 100) {
+                    c->enemy.overloaded = true;
+                    c->enemy.heat = 100;
+                    int16_t ov = c->enemy.max_hp * 8 / 100;
+                    c->enemy.hp -= ov;
+                    snprintf(c->log, COMBAT_LOG_LEN, "REV! FOE OVLD -%d", ov);
+                } else {
+                    snprintf(c->log, COMBAT_LOG_LEN, "REV:%d +20H%s", dmg, crit ? " CR" : "");
+                }
                 break;
             }
         }
     }
 
-    /* Check overload */
+    /* Check player overload */
     if(c->player.heat >= 100) {
         c->player.overloaded = true;
         c->player.heat = 100;
@@ -416,6 +522,9 @@ static void combat_enemy_action(EyePhantomApp* app) {
     Combat* c = &app->combat;
     if(c->state != COMBAT_ENEMY_TURN) return;
 
+    c->enemy.defending = false;
+    int16_t spd_reduce = c->enemy.stats.spd / 2;
+
     if(c->enemy.overloaded) {
         snprintf(c->log, COMBAT_LOG_LEN, "FOE OVERLOADED!");
         c->enemy.overloaded = false;
@@ -426,38 +535,62 @@ static void combat_enemy_action(EyePhantomApp* app) {
         uint8_t action;
 
         if(c->enemy.heat >= 80) {
-            action = (roll < 10) ? 0 : (roll < 10) ? 1 : 2;  /* 10/0/90 */
+            /* 5/0/70/25 — never Surge when near overload */
+            action = (roll < 5) ? 0 : (roll < 75) ? 2 : 3;
         } else if(c->enemy.heat >= 50) {
-            action = (roll < 30) ? 0 : (roll < 40) ? 1 : 2;  /* 30/10/60 */
+            /* 20/5/50/25 */
+            action = (roll < 20) ? 0 : (roll < 25) ? 1 : (roll < 75) ? 2 : 3;
         } else {
-            action = (roll < 70) ? 0 : (roll < 90) ? 1 : 2;  /* 70/20/10 */
+            /* 50/15/10/25 */
+            action = (roll < 50) ? 0 : (roll < 65) ? 1 : (roll < 75) ? 2 : 3;
         }
 
         switch(action) {
-            case 0: { /* ATK */
+            case 0: { /* STRIKE */
                 bool crit;
-                int16_t dmg = combat_calc_damage(&c->enemy, &c->player, false, &crit);
-                if(c->player.defending) dmg /= 2;
+                int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 0, &crit);
+                if(c->player.defending) { dmg /= 2; c->player.defending = false; }
                 c->player.hp -= dmg;
-                c->enemy.heat += 20;
-                c->player.defending = false;
-                snprintf(c->log, COMBAT_LOG_LEN, "FOE ATK: %d%s", dmg, crit ? " CRIT!" : "");
+                int16_t heat = 20 - spd_reduce;
+                if(heat < 0) heat = 0;
+                c->enemy.heat += heat;
+                snprintf(c->log, COMBAT_LOG_LEN, "FOE STR:%d%s", dmg, crit ? " CRIT!" : "");
                 break;
             }
-            case 1: { /* BURST */
+            case 1: { /* SURGE */
                 bool crit;
-                int16_t dmg = combat_calc_damage(&c->enemy, &c->player, true, &crit);
-                if(c->player.defending) dmg /= 2;
+                int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 1, &crit);
+                if(c->player.defending) { dmg /= 2; c->player.defending = false; }
                 c->player.hp -= dmg;
-                c->enemy.heat += 35;
-                c->player.defending = false;
-                snprintf(c->log, COMBAT_LOG_LEN, "FOE BURST: %d%s", dmg, crit ? " CRIT!" : "");
+                int16_t heat = 35 - spd_reduce;
+                if(heat < 0) heat = 0;
+                c->enemy.heat += heat;
+                snprintf(c->log, COMBAT_LOG_LEN, "FOE SRG:%d%s", dmg, crit ? " CRIT!" : "");
                 break;
             }
-            case 2: { /* DEF */
+            case 2: { /* GUARD */
                 c->enemy.heat = c->enemy.heat > 30 ? c->enemy.heat - 30 : 0;
                 c->enemy.defending = true;
-                snprintf(c->log, COMBAT_LOG_LEN, "FOE DEFENDS");
+                snprintf(c->log, COMBAT_LOG_LEN, "FOE GUARDS");
+                break;
+            }
+            case 3: { /* REVERSE */
+                bool crit;
+                int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 3, &crit);
+                if(c->player.defending) { dmg /= 2; c->player.defending = false; }
+                c->player.hp -= dmg;
+                int16_t heat = 10 - spd_reduce;
+                if(heat < 0) heat = 0;
+                c->enemy.heat += heat;
+                c->player.heat += 20;
+                /* Check player overload from heat transfer */
+                if(c->player.heat >= 100) {
+                    c->player.overloaded = true;
+                    c->player.heat = 100;
+                    int16_t ov = c->player.max_hp * 8 / 100;
+                    c->player.hp -= ov;
+                }
+                snprintf(c->log, COMBAT_LOG_LEN, "FOE REV:%d +20H", dmg);
                 break;
             }
         }
@@ -493,7 +626,7 @@ static void combat_enemy_action(EyePhantomApp* app) {
  * ================================================================ */
 
 #define SAVE_MAGIC  0x45505450  /* "EPTP" */
-#define SAVE_VER    1
+#define SAVE_VER    3
 
 #pragma pack(push, 1)
 typedef struct {
@@ -519,6 +652,13 @@ typedef struct {
     SavedPhantom stored[MAX_STORED_PHANTOMS];
     uint32_t data_shards;
     uint16_t current_floor;
+    /* v2: persistent damaged enemy */
+    bool     has_saved_combat;
+    uint16_t saved_combat_floor;
+    SavedPhantom saved_enemy;
+    int16_t  saved_enemy_hp;
+    int16_t  saved_enemy_heat;
+    bool     saved_enemy_overloaded;
 } SaveData;
 #pragma pack(pop)
 
@@ -578,6 +718,15 @@ static void game_save(EyePhantomApp* app) {
         save_save_phantom(&app->stored[i], &data.stored[i]);
     data.data_shards   = app->data_shards;
     data.current_floor = app->current_floor;
+    /* v2: persistent combat */
+    data.has_saved_combat      = app->has_saved_combat;
+    data.saved_combat_floor    = app->saved_combat_floor;
+    if(app->has_saved_combat) {
+        save_save_phantom(&app->saved_enemy_phantom, &data.saved_enemy);
+        data.saved_enemy_hp         = app->saved_enemy_hp;
+        data.saved_enemy_heat       = app->saved_enemy_heat;
+        data.saved_enemy_overloaded = app->saved_enemy_overloaded;
+    }
 
     File* file = storage_file_alloc(storage);
     if(storage_file_open(file, SAVE_FILE, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
@@ -596,7 +745,7 @@ static bool game_load(EyePhantomApp* app) {
     File* file = storage_file_alloc(storage);
     if(storage_file_open(file, SAVE_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
         if(storage_file_read(file, &data, sizeof(data)) == sizeof(data) &&
-           data.magic == SAVE_MAGIC && data.ver == SAVE_VER) {
+           data.magic == SAVE_MAGIC && data.ver >= 2 && data.ver <= SAVE_VER) {
             app->has_active = data.has_active;
             if(data.has_active) save_load_phantom(&app->active_phantom, &data.active);
             app->stored_count = data.stored_count;
@@ -604,6 +753,27 @@ static bool game_load(EyePhantomApp* app) {
                 save_load_phantom(&app->stored[i], &data.stored[i]);
             app->data_shards   = data.data_shards;
             app->current_floor = data.current_floor;
+            /* v2: persistent combat */
+            if(data.ver >= 2) {
+                app->has_saved_combat      = data.has_saved_combat;
+                app->saved_combat_floor    = data.saved_combat_floor;
+                if(data.has_saved_combat) {
+                    save_load_phantom(&app->saved_enemy_phantom, &data.saved_enemy);
+                    app->saved_enemy_hp         = data.saved_enemy_hp;
+                    app->saved_enemy_heat       = data.saved_enemy_heat;
+                    app->saved_enemy_overloaded = data.saved_enemy_overloaded;
+                }
+            }
+            /* v3: remap old TECHNICIAN/GLITCH to new GLITCH */
+            if(data.ver < 3) {
+                if(app->has_active && (uint8_t)app->active_phantom.cls >= 2)
+                    app->active_phantom.cls = CLASS_GLITCH;
+                for(uint8_t i = 0; i < app->stored_count; i++)
+                    if((uint8_t)app->stored[i].cls >= 2)
+                        app->stored[i].cls = CLASS_GLITCH;
+                if(app->has_saved_combat && (uint8_t)app->saved_enemy_phantom.cls >= 2)
+                    app->saved_enemy_phantom.cls = CLASS_GLITCH;
+            }
             ok = true;
         }
     }
@@ -943,7 +1113,7 @@ static void render_combat(Canvas* c, EyePhantomApp* app) {
     draw_str(c, "H", 68, 8);
     draw_hbar(c, 76, 8, 50, 4, co->enemy.heat / 100.0f);
 
-    /* Heat danger flash on the bar itself */
+    /* Heat danger flash */
     if(co->player.heat >= 70 && (t % 16 < 8))
         canvas_draw_frame(c, 6, 7, 58, 6);
     if(co->enemy.heat >= 70 && (t % 16 < 8))
@@ -971,38 +1141,46 @@ static void render_combat(Canvas* c, EyePhantomApp* app) {
     snprintf(buf, sizeof(buf), "%d/%d", co->enemy.hp, co->enemy.max_hp);
     draw_str(c, buf, 96, 36);
 
-    draw_str(c, "VS", 58, 24);
+    /* Class advantage indicator between sprites */
+    float adv = combat_class_advantage(
+        co->player.phantom.cls, co->enemy.phantom.cls);
+    if(adv > 1.0f) {
+        draw_str(c, ">>", 58, 22);
+    } else if(adv < 1.0f) {
+        draw_str(c, "<<", 58, 22);
+    } else {
+        draw_str(c, "==", 58, 22);
+    }
+
+    /* Class abbreviations */
+    static const char* CLS_SHORT[] = {"BRL", "DEF", "GLI"};
+    draw_str(c, CLS_SHORT[co->player.phantom.cls], 30, 26);
+    draw_str(c, CLS_SHORT[co->enemy.phantom.cls], 80, 26);
 
     /* --- Combat log (rows 42-47) --- */
     canvas_draw_line(c, 0, 42, 127, 42);
     draw_str(c, co->log, 2, 44);
 
-    /* --- BOTTOM: actions (rows 48-63) --- */
+    /* --- BOTTOM: actions (rows 49-63) --- */
     canvas_draw_line(c, 0, 49, 127, 49);
 
     if(co->state == COMBAT_PLAYER_TURN) {
-        const char* acts[] = {"ATK", "BURST", "DEF"};
-        int px[] = {2, 44, 86};
+        /* 2x2 grid: STRIKE  SURGE / GUARD  REV */
+        const char* acts[] = {"STRIKE", "SURGE", "GUARD", "REV"};
+        int px[] = {12, 68, 12, 68};
+        int py[] = {51, 51, 58, 58};
 
-        for(int i = 0; i < 3; i++) {
-            char label[16];
-            snprintf(label, sizeof(label), "%s:%s",
-                     i == 0 ? "UP" : i == 1 ? "RT" : "DN", acts[i]);
+        for(int i = 0; i < 4; i++) {
             if(i == app->cursor) {
-                int w = strlen(label) * CHAR_W + 4;
-                canvas_draw_box(c, px[i], 51, w, 6);
+                int w = (int)strlen(acts[i]) * CHAR_W + 4;
+                canvas_draw_box(c, px[i], py[i] - 1, w, 7);
                 canvas_invert_color(c);
-                draw_str(c, label, px[i] + 2, 52);
+                draw_str(c, acts[i], px[i] + 2, py[i]);
                 canvas_invert_color(c);
             } else {
-                draw_str(c, label, px[i] + 2, 52);
+                draw_str(c, acts[i], px[i] + 2, py[i]);
             }
         }
-
-        /* Compact hint line at the very bottom */
-        const char* h = (app->cursor == 0) ? "HIT  +20h" :
-                        (app->cursor == 1) ? "x1.5 +35h" : "BLOCK -30h";
-        draw_str_centered(c, h, 59);
     } else if(co->state == COMBAT_ENEMY_TURN) {
         draw_str_centered(c, "ENEMY TURN...", 55);
     } else if(co->state == COMBAT_WIN) {
@@ -1063,7 +1241,7 @@ static void render_defeat(Canvas* c, EyePhantomApp* app) {
 
 static void render_camp(Canvas* c, EyePhantomApp* app) {
     canvas_clear(c);
-    const char* items[] = {"UPGRADE STATS", "COLLECTION", "BACK"};
+    const char* items[] = {"UPGRADE STATS", "COLLECTION", "COMBAT INFO", "BACK"};
 
     draw_str(c, "CAMP", 2, 2);
     char buf[32];
@@ -1071,7 +1249,7 @@ static void render_camp(Canvas* c, EyePhantomApp* app) {
     draw_str(c, buf, 80, 2);
     canvas_draw_line(c, 0, 9, 127, 9);
 
-    for(int i = 0; i < 3; i++) {
+    for(int i = 0; i < 4; i++) {
         int y = 14 + i * 12;
         if(i == app->cursor) {
             canvas_draw_box(c, 0, y - 1, 128, 7);
@@ -1167,6 +1345,65 @@ static void render_collection(Canvas* c, EyePhantomApp* app) {
     }
 }
 
+static void render_info(Canvas* c, EyePhantomApp* app) {
+    canvas_clear(c);
+    canvas_draw_line(c, 0, 9, 127, 9);
+    
+    char title_buf[32];
+    snprintf(title_buf, sizeof(title_buf), "< %d/3 >", (int)app->cursor + 1);
+    draw_str(c, "COMBAT INFO", 2, 2);
+    draw_str(c, title_buf, 90, 2);
+
+    if(app->cursor == 0) {
+        /* Page 1: Triangle diagram */
+        draw_str_centered(c, "BRAWLER", 14);
+        draw_str(c, "GLITCH", 10, 38);
+        draw_str(c, "DEFENDER", 78, 38);
+
+        /* Arrows */
+        /* BRAWLER -> GLITCH (down-left) */
+        canvas_draw_line(c, 54, 21, 30, 35);
+        canvas_draw_line(c, 30, 35, 30, 32);
+        canvas_draw_line(c, 30, 35, 34, 35);
+
+        /* GLITCH -> DEFENDER (right) */
+        canvas_draw_line(c, 42, 40, 74, 40);
+        canvas_draw_line(c, 74, 40, 71, 38);
+        canvas_draw_line(c, 74, 40, 71, 42);
+
+        /* DEFENDER -> BRAWLER (up-left) */
+        canvas_draw_line(c, 92, 35, 68, 21);
+        canvas_draw_line(c, 68, 21, 68, 24);
+        canvas_draw_line(c, 68, 21, 72, 21);
+
+        draw_str_centered(c, "ADVANTAGE DEALS 1.3X DAMAGE", 48);
+        draw_str_centered(c, "DISADVANTAGE DEALS 0.8X DMG", 56);
+    } else if(app->cursor == 1) {
+        /* Page 2: Actions */
+        draw_str(c, "UP:STRIKE", 2, 13);
+        draw_str(c, "1.0X, +20H", 52, 13);
+
+        draw_str(c, "RT:SURGE", 2, 23);
+        draw_str(c, "1.5X, +35H", 52, 23);
+
+        draw_str(c, "DN:GUARD", 2, 33);
+        draw_str(c, "BLOCK, -30H", 52, 33);
+
+        draw_str(c, "LT:REV", 2, 43);
+        draw_str(c, "0.3X, +10H/+20F", 52, 43);
+
+        draw_str_centered(c, "OVERLOAD AT 100 HEAT (8% DMG)", 55);
+    } else {
+        /* Page 3: Stats */
+        draw_str(c, "HP : HEALTH POINTS", 2, 13);
+        draw_str(c, "ATK: BASE DAMAGE MULTIPLIER", 2, 23);
+        draw_str(c, "DEF: REDUCES DAMAGE TAKEN", 2, 33);
+        draw_str(c, "SPD: ACT FIRST & CRIT RATE", 2, 43);
+
+        draw_str_centered(c, "COOLING: SPD/2 PER ACTION", 55);
+    }
+}
+
 static void render_message(Canvas* c, EyePhantomApp* app) {
     if(app->message_timer == 0) return;
     int w = strlen(app->message) * CHAR_W + 8;
@@ -1199,6 +1436,7 @@ static void app_draw(Canvas* c, void* context) {
         case SCENE_CAMP:       render_camp(c, app); break;
         case SCENE_UPGRADE:    render_upgrade(c, app); break;
         case SCENE_COLLECTION: render_collection(c, app); break;
+        case SCENE_INFO:       render_info(c, app); break;
     }
 
     if(app->message_timer > 0) render_message(c, app);
@@ -1316,10 +1554,18 @@ static void app_input(InputEvent* event, void* context) {
             if(co->state != COMBAT_PLAYER_TURN) break;
 
             if(is_nav) {
-                if(key == InputKeyUp)    app->cursor = (app->cursor + 2) % 3;
-                if(key == InputKeyRight) app->cursor = (app->cursor + 1) % 3;
-                if(key == InputKeyDown)  app->cursor = (app->cursor + 1) % 3;
-                if(key == InputKeyLeft)  app->cursor = (app->cursor + 2) % 3;
+                if(key == InputKeyUp) {
+                    if(app->cursor >= 2) app->cursor -= 2;
+                }
+                if(key == InputKeyDown) {
+                    if(app->cursor <= 1) app->cursor += 2;
+                }
+                if(key == InputKeyLeft) {
+                    if(app->cursor == 1 || app->cursor == 3) app->cursor -= 1;
+                }
+                if(key == InputKeyRight) {
+                    if(app->cursor == 0 || app->cursor == 2) app->cursor += 1;
+                }
             }
 
             if(key == InputKeyOk && is_act) {
@@ -1328,14 +1574,36 @@ static void app_input(InputEvent* event, void* context) {
                     uint32_t shards = app->current_floor + 1;
                     app->data_shards += shards;
                     app->current_floor++;
+                    app->has_saved_combat = false;
                     game_save(app);
                     app->scene = SCENE_VICTORY;
                 } else if(co->state == COMBAT_LOSE) {
+                    /* Save enemy state so player can swap phantom and rematch */
+                    app->saved_enemy_phantom   = co->enemy.phantom;
+                    app->saved_enemy_hp        = co->enemy.hp;
+                    app->saved_enemy_heat      = co->enemy.heat;
+                    app->saved_enemy_overloaded = co->enemy.overloaded;
+                    app->saved_combat_floor    = app->current_floor;
+                    app->has_saved_combat      = true;
                     app->has_active = false;
                     memset(&app->active_phantom, 0, sizeof(Phantom));
                     game_save(app);
                     app->scene = SCENE_DEFEAT;
                 }
+            }
+            if(key == InputKeyBack && is_act) {
+                app->saved_enemy_phantom   = co->enemy.phantom;
+                app->saved_enemy_hp        = co->enemy.hp;
+                app->saved_enemy_heat      = co->enemy.heat;
+                app->saved_enemy_overloaded = co->enemy.overloaded;
+                app->saved_combat_floor    = app->current_floor;
+                app->has_saved_combat      = true;
+                game_save(app);
+
+                app->scene = SCENE_MENU;
+                app->cursor = 0;
+                strncpy(app->message, "RETREATED!", 32);
+                app->message_timer = 40;
             }
             break;
         }
@@ -1352,7 +1620,7 @@ static void app_input(InputEvent* event, void* context) {
         case SCENE_CAMP: {
             if(is_nav) {
                 if(key == InputKeyUp)   { if(app->cursor > 0) app->cursor--; }
-                if(key == InputKeyDown) { if(app->cursor < 2) app->cursor++; }
+                if(key == InputKeyDown) { if(app->cursor < 3) app->cursor++; }
             }
             if(key == InputKeyOk && is_act) {
                 if(app->cursor == 0) {
@@ -1368,9 +1636,28 @@ static void app_input(InputEvent* event, void* context) {
                     app->scene = SCENE_COLLECTION;
                     app->collection_idx = 0;
                 }
-                if(app->cursor == 2) app->scene = SCENE_MENU;
+                if(app->cursor == 2) {
+                    app->scene = SCENE_INFO;
+                    app->cursor = 0;
+                }
+                if(app->cursor == 3) app->scene = SCENE_MENU;
             }
             if(key == InputKeyBack && is_act) app->scene = SCENE_MENU;
+            break;
+        }
+        case SCENE_INFO: {
+            if(is_nav) {
+                if(key == InputKeyLeft) {
+                    if(app->cursor > 0) app->cursor--;
+                }
+                if(key == InputKeyRight) {
+                    if(app->cursor < 2) app->cursor++;
+                }
+            }
+            if(key == InputKeyBack && is_act) {
+                app->scene = SCENE_CAMP;
+                app->cursor = 2;
+            }
             break;
         }
         case SCENE_UPGRADE: {
@@ -1478,9 +1765,17 @@ static void app_tick(void* context) {
                 uint32_t shards = app->current_floor + 1;
                 app->data_shards += shards;
                 app->current_floor++;
+                app->has_saved_combat = false;
                 game_save(app);
                 app->scene = SCENE_VICTORY;
             } else if(app->combat.state == COMBAT_LOSE) {
+                /* Save enemy state so player can swap phantom and rematch */
+                app->saved_enemy_phantom   = app->combat.enemy.phantom;
+                app->saved_enemy_hp        = app->combat.enemy.hp;
+                app->saved_enemy_heat      = app->combat.enemy.heat;
+                app->saved_enemy_overloaded = app->combat.enemy.overloaded;
+                app->saved_combat_floor    = app->current_floor;
+                app->has_saved_combat      = true;
                 app->has_active = false;
                 memset(&app->active_phantom, 0, sizeof(Phantom));
                 game_save(app);

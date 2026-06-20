@@ -372,20 +372,19 @@ const FEET = [
 // ============================================================
 // CLASS DEFINITIONS
 // ============================================================
-const CLASSES = ['BRAWLER','DEFENDER','TECHNICIAN','GLITCH'];
-const CLASS_COLORS = { BRAWLER: 1, DEFENDER: 1, TECHNICIAN: 1, GLITCH: 1 };
+const CLASSES = ['BRAWLER','DEFENDER','GLITCH'];
+const CLASS_COLORS = { BRAWLER: 1, DEFENDER: 1, GLITCH: 1 };
 const CLASS_STAT_BIAS = {
-  BRAWLER:    { hp: 1.1, atk: 1.4, def: 0.9, spd: 0.7 },
-  DEFENDER:   { hp: 1.3, atk: 0.7, def: 1.4, spd: 0.8 },
-  TECHNICIAN: { hp: 1.0, atk: 1.0, def: 1.0, spd: 1.1 },
-  GLITCH:     { hp: 0.7, atk: 1.3, def: 0.6, spd: 1.5 },
+  BRAWLER:    { hp: 1.2, atk: 1.5, def: 0.8, spd: 0.7 },
+  DEFENDER:   { hp: 1.4, atk: 0.7, def: 1.5, spd: 0.8 },
+  GLITCH:     { hp: 0.7, atk: 1.1, def: 0.6, spd: 1.6 },
 };
 const PROTOCOLS_IR = ['NEC','SONY','SAMSUNG','RC5'];
 const PROTOCOLS_RF = ['FIXED','ROLLING','SENSOR','RAW'];
 // Combined for enemy generation
 const PROTOCOLS = PROTOCOLS_IR.concat(PROTOCOLS_RF);
 // 433MHz protocol → class mapping (different flavors)
-const RF_CLASS_MAP = { FIXED: 'BRAWLER', ROLLING: 'TECHNICIAN', SENSOR: 'DEFENDER', RAW: 'GLITCH' };
+const RF_CLASS_MAP = { FIXED: 'BRAWLER', ROLLING: 'GLITCH', SENSOR: 'DEFENDER', RAW: 'GLITCH' };
 
 // Name syllables for procedural naming
 const SYL1 = ['ZAR','NEX','VOL','KRI','PHA','DRE','MOX','SYN','VEX','LUR','GHO','TYR','BYT','NIX','ORC','HEX'];
@@ -596,10 +595,15 @@ function flushBuffer() {
 function generatePhantom(protocol, address, command, isRF = false) {
   let cls;
   if (isRF) {
-    cls = RF_CLASS_MAP[protocol] || 'GLITCH';
+    if (protocol === 'FIXED') cls = 'BRAWLER';
+    else if (protocol === 'SENSOR') cls = 'DEFENDER';
+    else if (protocol === 'RAW') cls = 'GLITCH';
+    else cls = CLASSES[(address + command) % 3];
   } else {
-    const classIdx = PROTOCOLS_IR.indexOf(protocol);
-    cls = CLASSES[classIdx >= 0 ? classIdx : 3];
+    if (protocol === 'NEC') cls = 'BRAWLER';
+    else if (protocol === 'SONY') cls = 'DEFENDER';
+    else if (protocol === 'SAMSUNG') cls = 'GLITCH';
+    else cls = CLASSES[(address + command) % 3];
   }
   const bias = CLASS_STAT_BIAS[cls];
 
@@ -680,7 +684,13 @@ function saveGame() {
     stored: game.storedPhantoms,
     shards: game.dataShards,
     floor: game.currentFloor,
-    ver: 1,
+    ver: 3,
+    hasSavedCombat: game.hasSavedCombat,
+    savedCombatFloor: game.savedCombatFloor,
+    savedEnemyPhantom: game.savedEnemyPhantom,
+    savedEnemyHp: game.savedEnemyHp,
+    savedEnemyHeat: game.savedEnemyHeat,
+    savedEnemyOverloaded: game.savedEnemyOverloaded,
   };
   try { localStorage.setItem('eotp_save', JSON.stringify(data)); } catch(e) {}
 }
@@ -694,11 +704,27 @@ function loadGame() {
     game.storedPhantoms = data.stored || [];
     game.dataShards = data.shards || 0;
     game.currentFloor = data.floor || 1;
+    // v2: persistent combat
+    game.hasSavedCombat      = data.hasSavedCombat || false;
+    game.savedCombatFloor    = data.savedCombatFloor || 0;
+    game.savedEnemyPhantom   = data.savedEnemyPhantom || null;
+    game.savedEnemyHp        = data.savedEnemyHp || 0;
+    game.savedEnemyHeat      = data.savedEnemyHeat || 0;
+    game.savedEnemyOverloaded = data.savedEnemyOverloaded || false;
+    // v3: migrate TECHNICIAN to GLITCH
+    const ver = data.ver || 1;
+    if (ver < 3) {
+      if (game.activePhantom && game.activePhantom.cls === 'TECHNICIAN') game.activePhantom.cls = 'GLITCH';
+      for (const p of game.storedPhantoms) if (p.cls === 'TECHNICIAN') p.cls = 'GLITCH';
+      if (game.savedEnemyPhantom && game.savedEnemyPhantom.cls === 'TECHNICIAN') game.savedEnemyPhantom.cls = 'GLITCH';
+    }
     // Rebuild sprites
     if (game.activePhantom)
       game.activePhantom.sprite = compositeSprite(game.activePhantom.headIdx, game.activePhantom.bodyIdx, game.activePhantom.feetIdx);
     for (const p of game.storedPhantoms)
       p.sprite = compositeSprite(p.headIdx, p.bodyIdx, p.feetIdx);
+    if (game.savedEnemyPhantom)
+      game.savedEnemyPhantom.sprite = compositeSprite(game.savedEnemyPhantom.headIdx, game.savedEnemyPhantom.bodyIdx, game.savedEnemyPhantom.feetIdx);
     return true;
   } catch(e) { return false; }
 }
@@ -734,6 +760,13 @@ const game = {
   combatLog: [],
   // Exit flag
   exited: false,
+  // Persistent combat — keep damaged enemy between phantom swaps
+  hasSavedCombat: false,
+  savedEnemyPhantom: null,
+  savedEnemyHp: 0,
+  savedEnemyHeat: 0,
+  savedEnemyOverloaded: false,
+  savedCombatFloor: 0,
 };
 
 function setState(newState) {
@@ -770,6 +803,7 @@ function handleInput(key) {
     case 'VICTORY':  inputVictory(key); break;
     case 'DEFEAT':   inputDefeat(key); break;
     case 'CAMP':     inputCamp(key); break;
+    case 'INFO':     inputInfo(key); break;
     case 'COLLECTION': inputCollection(key); break;
     case 'UPGRADE':  inputUpgrade(key); break;
   }
@@ -878,14 +912,36 @@ function inputPhantom(key) {
 
 function inputCombat(key) {
   if (!game.combat || game.combat.state !== 'PLAYER_TURN') return;
-  const numActions = 3;  // ATK, BURST, DEF
-  if (key === 'up')   { game.cursor = (game.cursor - 1 + numActions) % numActions; sfxNavigate(); }
-  if (key === 'right'){ game.cursor = (game.cursor + 1) % numActions; sfxNavigate(); }
-  if (key === 'down') { game.cursor = (game.cursor + 1) % numActions; sfxNavigate(); }
-  if (key === 'left') { game.cursor = (game.cursor - 1 + numActions) % numActions; sfxNavigate(); }
+  if (key === 'up') {
+    if (game.cursor >= 2) { game.cursor -= 2; sfxNavigate(); }
+  }
+  if (key === 'down') {
+    if (game.cursor <= 1) { game.cursor += 2; sfxNavigate(); }
+  }
+  if (key === 'left') {
+    if (game.cursor === 1 || game.cursor === 3) { game.cursor -= 1; sfxNavigate(); }
+  }
+  if (key === 'right') {
+    if (game.cursor === 0 || game.cursor === 2) { game.cursor += 1; sfxNavigate(); }
+  }
   if (key === 'ok') {
     sfxSelect();
     executeTurn(game.cursor);
+  }
+  if (key === 'back') {
+    sfxBack();
+    const c = game.combat;
+    // Save enemy state
+    game.savedEnemyPhantom    = c.enemy.phantom;
+    game.savedEnemyHp         = c.enemy.hp;
+    game.savedEnemyHeat       = c.enemy.heat;
+    game.savedEnemyOverloaded = c.enemy.overloaded;
+    game.savedCombatFloor     = game.currentFloor;
+    game.hasSavedCombat       = true;
+    saveGame();
+    // Go back to menu
+    setState('MENU');
+    game.combatLog = ['RETREATED!'];
   }
 }
 
@@ -902,7 +958,7 @@ function inputDefeat(key) {
 }
 
 function inputCamp(key) {
-  const items = ['UPGRADE STATS','COLLECTION','BACK'];
+  const items = ['UPGRADE STATS','COLLECTION','COMBAT INFO','BACK'];
   game.maxCursor = items.length - 1;
   if (key === 'up')   { game.cursor = Math.max(0, game.cursor - 1); sfxNavigate(); }
   if (key === 'down') { game.cursor = Math.min(game.maxCursor, game.cursor + 1); sfxNavigate(); }
@@ -913,9 +969,24 @@ function inputCamp(key) {
       else setState('UPGRADE');
     }
     if (game.cursor === 1) { setState('COLLECTION'); game.collectionIdx = 0; }
-    if (game.cursor === 2) setState('MENU');
+    if (game.cursor === 2) { setState('INFO'); game.cursor = 0; }
+    if (game.cursor === 3) setState('MENU');
   }
   if (key === 'back') { sfxBack(); setState('MENU'); }
+}
+
+function inputInfo(key) {
+  if (key === 'left') {
+    if (game.cursor > 0) { game.cursor--; sfxNavigate(); }
+  }
+  if (key === 'right') {
+    if (game.cursor < 2) { game.cursor++; sfxNavigate(); }
+  }
+  if (key === 'back') {
+    sfxBack();
+    setState('CAMP');
+    game.cursor = 2;
+  }
 }
 
 function inputUpgrade(key) {
@@ -973,38 +1044,92 @@ function inputCollection(key) {
 // ============================================================
 // COMBAT ENGINE
 // ============================================================
+function getClassAdvantage(attackerClass, defenderClass) {
+  if ((attackerClass === 'BRAWLER' && defenderClass === 'GLITCH') ||
+      (attackerClass === 'GLITCH' && defenderClass === 'DEFENDER') ||
+      (attackerClass === 'DEFENDER' && defenderClass === 'BRAWLER')) {
+    return 1.3;
+  }
+  if ((attackerClass === 'GLITCH' && defenderClass === 'BRAWLER') ||
+      (attackerClass === 'DEFENDER' && defenderClass === 'GLITCH') ||
+      (attackerClass === 'BRAWLER' && defenderClass === 'DEFENDER')) {
+    return 0.8;
+  }
+  return 1.0;
+}
+
 function startCombat() {
+  /* Resume a saved (damaged) enemy on this floor */
+  if (game.hasSavedCombat && game.savedCombatFloor === game.currentFloor) {
+    const enemy = game.savedEnemyPhantom;
+    const ps = getEffectiveStats(game.activePhantom);
+    const es = getEffectiveStats(enemy);
+    const foeFirst = es.spd > ps.spd;
+    game.combat = {
+      player: { phantom: game.activePhantom, hp: ps.hp, maxHp: ps.hp, heat: 0, overloaded: false, stats: ps },
+      enemy:  { phantom: enemy, hp: game.savedEnemyHp, maxHp: es.hp, heat: game.savedEnemyHeat, overloaded: game.savedEnemyOverloaded, stats: es },
+      state: foeFirst ? 'ENEMY_TURN' : 'PLAYER_TURN',
+      floor: game.currentFloor,
+      log: [foeFirst ? 'FOE IS FASTER REMATCH!' : 'FLOOR ' + game.currentFloor + ' - REMATCH!'],
+    };
+    game.hasSavedCombat = false;
+    game.cursor = 0;
+    if (foeFirst) setTimeout(() => enemyTurn(), 300);
+    return;
+  }
+
   const enemy = generateEnemy(game.currentFloor);
   const ps = getEffectiveStats(game.activePhantom);
   const es = getEffectiveStats(enemy);
+  const foeFirst = es.spd > ps.spd;
   game.combat = {
     player: { phantom: game.activePhantom, hp: ps.hp, maxHp: ps.hp, heat: 0, overloaded: false, stats: ps },
     enemy:  { phantom: enemy, hp: es.hp, maxHp: es.hp, heat: 0, overloaded: false, stats: es },
-    state: 'PLAYER_TURN',
+    state: foeFirst ? 'ENEMY_TURN' : 'PLAYER_TURN',
     floor: game.currentFloor,
-    log: ['FLOOR ' + game.currentFloor + ' - FIGHT!'],
+    log: [foeFirst ? 'FOE IS FASTER!' : 'FLOOR ' + game.currentFloor + ' - FIGHT!'],
   };
-  game.combatLog = game.combat.log;
   game.cursor = 0;
+  if (foeFirst) setTimeout(() => enemyTurn(), 300);
 }
 
-function calcDamage(attacker, defender, isSkill) {
-  const atkStat = attacker.stats.atk;
-  const defStat = defender.stats.def;
-  let base = Math.max(1, atkStat - Math.floor(defStat / 2));
-  if (isSkill) base = Math.floor(base * 1.5);
-  // Crit check (SPD based, capped at 30%)
-  const critChance = Math.min(0.3, attacker.stats.spd * 0.02);
+function calcDamage(attacker, defender, actionType) {
+  let base;
+  if (actionType === 1) {
+    base = Math.floor(attacker.stats.atk * 1.5); // Surge
+  } else if (actionType === 3) {
+    base = Math.floor(attacker.stats.atk * 0.3); // Reverse
+    if (base < 1) base = 1;
+  } else {
+    base = attacker.stats.atk; // Strike
+  }
+
+  // Flat DEF reduction (DEF/3)
+  base = base - Math.floor(defender.stats.def / 3);
+  if (base < 1) base = 1;
+
+  // Class advantage multiplier
+  const adv = getClassAdvantage(attacker.phantom.cls, defender.phantom.cls);
+  base = Math.floor(base * adv);
+  if (base < 1) base = 1;
+
+  // Crit check: SPD * 2 / 100, capped at 25%
+  const critChance = Math.min(0.25, attacker.stats.spd * 0.02);
   const isCrit = Math.random() < critChance;
   if (isCrit) base = Math.floor(base * 1.8);
+
   // Small random variance ±15%
-  const variance = 0.85 + Math.random() * 0.3;
-  return { damage: Math.max(1, Math.floor(base * variance)), isCrit };
+  const variance = 0.85 + Math.random() * 0.30;
+  const damage = Math.max(1, Math.floor(base * variance));
+  return { damage, isCrit };
 }
 
 function executeTurn(actionIdx) {
   const c = game.combat;
   if (c.state !== 'PLAYER_TURN') return;
+
+  c.player.defending = false;
+  const spdReduce = Math.floor(c.player.stats.spd / 2);
 
   // Player action
   if (c.player.overloaded) {
@@ -1013,27 +1138,56 @@ function executeTurn(actionIdx) {
     c.player.heat = Math.max(0, c.player.heat - 50);
   } else {
     switch(actionIdx) {
-      case 0: { // Attack
-        const res = calcDamage(c.player, c.enemy, false);
-        c.enemy.hp -= res.damage;
-        c.player.heat += 20;
-        c.log.push('ATK: ' + res.damage + (res.isCrit ? ' CRIT!' : ''));
+      case 0: { // Strike
+        const res = calcDamage(c.player, c.enemy, 0);
+        let dmg = res.damage;
+        if (c.enemy.defending) { dmg = Math.floor(dmg * 0.5); c.enemy.defending = false; }
+        c.enemy.hp -= dmg;
+        let heat = 20 - spdReduce;
+        if (heat < 0) heat = 0;
+        c.player.heat += heat;
+        c.log.push('STRIKE: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
         break;
       }
-      case 1: { // Skill
-        const res = calcDamage(c.player, c.enemy, true);
-        c.enemy.hp -= res.damage;
-        c.player.heat += 35;
-        c.log.push('BURST: ' + res.damage + (res.isCrit ? ' CRIT!' : ''));
+      case 1: { // Surge
+        const res = calcDamage(c.player, c.enemy, 1);
+        let dmg = res.damage;
+        if (c.enemy.defending) { dmg = Math.floor(dmg * 0.5); c.enemy.defending = false; }
+        c.enemy.hp -= dmg;
+        let heat = 35 - spdReduce;
+        if (heat < 0) heat = 0;
+        c.player.heat += heat;
+        c.log.push('SURGE: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 6; sfxHit(); }
         break;
       }
-      case 2: { // Defend
+      case 2: { // Guard
         c.player.heat = Math.max(0, c.player.heat - 30);
         c.player.defending = true;
-        c.log.push('DEFEND! HEAT -30');
+        c.log.push('GUARD! -30 HEAT');
         sfxHeal();
+        break;
+      }
+      case 3: { // Reverse
+        const res = calcDamage(c.player, c.enemy, 3);
+        let dmg = res.damage;
+        if (c.enemy.defending) { dmg = Math.floor(dmg * 0.5); c.enemy.defending = false; }
+        c.enemy.hp -= dmg;
+        let heat = 10 - spdReduce;
+        if (heat < 0) heat = 0;
+        c.player.heat += heat;
+        c.enemy.heat += 20;
+        if (c.enemy.heat >= 100) {
+          c.enemy.overloaded = true;
+          c.enemy.heat = 100;
+          const ov = Math.floor(c.enemy.maxHp * 0.08);
+          c.enemy.hp -= ov;
+          c.log.push('REV! FOE OVERLOADED -' + ov);
+        } else {
+          c.log.push('REV: ' + dmg + ' +20H FOE' + (res.isCrit ? ' CR' : ''));
+        }
+        if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
         break;
       }
     }
@@ -1053,6 +1207,13 @@ function executeTurn(actionIdx) {
   if (c.player.hp <= 0) {
     c.player.hp = 0;
     c.state = 'LOSE';
+    // Save enemy state for rematch
+    game.savedEnemyPhantom   = c.enemy.phantom;
+    game.savedEnemyHp        = c.enemy.hp;
+    game.savedEnemyHeat      = c.enemy.heat;
+    game.savedEnemyOverloaded = c.enemy.overloaded;
+    game.savedCombatFloor    = game.currentFloor;
+    game.hasSavedCombat      = true;
     game.activePhantom = null;
     saveGame();
     sfxDefeat();
@@ -1067,6 +1228,7 @@ function executeTurn(actionIdx) {
     const shards = game.currentFloor + 1;
     game.dataShards += shards;
     game.currentFloor++;
+    game.hasSavedCombat = false;
     saveGame();
     sfxVictory();
     setTimeout(() => setState('VICTORY'), 800);
@@ -1083,48 +1245,76 @@ function enemyTurn() {
   const c = game.combat;
   if (c.state !== 'ENEMY_TURN') return;
 
+  c.enemy.defending = false;
+  const spdReduce = Math.floor(c.enemy.stats.spd / 2);
+
   if (c.enemy.overloaded) {
     c.log.push('ENEMY OVERLOADED!');
     c.enemy.overloaded = false;
     c.enemy.heat = Math.max(0, c.enemy.heat - 50);
   } else {
     // AI: weighted random based on heat
-    let weights;
-    if (c.enemy.heat >= 80)      weights = [0.1, 0.0, 0.9];
-    else if (c.enemy.heat >= 50) weights = [0.3, 0.1, 0.6];
-    else                         weights = [0.7, 0.2, 0.1];
-
-    const roll = Math.random();
     let action;
-    if (roll < weights[0]) action = 0;
-    else if (roll < weights[0] + weights[1]) action = 1;
-    else action = 2;
+    const roll = Math.random();
+    if (c.enemy.heat >= 80) {
+      // 5% Strike, 70% Guard, 25% Reverse
+      action = (roll < 0.05) ? 0 : (roll < 0.75) ? 2 : 3;
+    } else if (c.enemy.heat >= 50) {
+      // 20% Strike, 5% Surge, 50% Guard, 25% Reverse
+      action = (roll < 0.20) ? 0 : (roll < 0.25) ? 1 : (roll < 0.75) ? 2 : 3;
+    } else {
+      // 50% Strike, 15% Surge, 10% Guard, 25% Reverse
+      action = (roll < 0.50) ? 0 : (roll < 0.65) ? 1 : (roll < 0.75) ? 2 : 3;
+    }
 
     switch(action) {
-      case 0: { // Attack
-        let res = calcDamage(c.enemy, c.player, false);
+      case 0: { // Strike
+        const res = calcDamage(c.enemy, c.player, 0);
         let dmg = res.damage;
         if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
         c.player.hp -= dmg;
-        c.enemy.heat += 20;
-        c.log.push('FOE ATK: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
+        let heat = 20 - spdReduce;
+        if (heat < 0) heat = 0;
+        c.enemy.heat += heat;
+        c.log.push('FOE STR: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
         if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
         break;
       }
-      case 1: { // Skill
-        let res = calcDamage(c.enemy, c.player, true);
+      case 1: { // Surge
+        const res = calcDamage(c.enemy, c.player, 1);
         let dmg = res.damage;
         if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
         c.player.hp -= dmg;
-        c.enemy.heat += 35;
-        c.log.push('FOE BURST: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
-        screenShake = 6; sfxHit();
+        let heat = 35 - spdReduce;
+        if (heat < 0) heat = 0;
+        c.enemy.heat += heat;
+        c.log.push('FOE SRG: ' + dmg + (res.isCrit ? ' CRIT!' : ''));
+        if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 6; sfxHit(); }
         break;
       }
-      case 2: { // Defend
+      case 2: { // Guard
         c.enemy.heat = Math.max(0, c.enemy.heat - 30);
         c.enemy.defending = true;
-        c.log.push('FOE DEFENDS');
+        c.log.push('FOE GUARDS');
+        break;
+      }
+      case 3: { // Reverse
+        const res = calcDamage(c.enemy, c.player, 3);
+        let dmg = res.damage;
+        if (c.player.defending) { dmg = Math.floor(dmg * 0.5); c.player.defending = false; }
+        c.player.hp -= dmg;
+        let heat = 10 - spdReduce;
+        if (heat < 0) heat = 0;
+        c.enemy.heat += heat;
+        c.player.heat += 20;
+        if (c.player.heat >= 100) {
+          c.player.overloaded = true;
+          c.player.heat = 100;
+          const ov = Math.floor(c.player.maxHp * 0.08);
+          c.player.hp -= ov;
+        }
+        c.log.push('FOE REV: ' + dmg);
+        if (res.isCrit) { screenFlash = 2; sfxCrit(); } else { screenShake = 4; sfxHit(); }
         break;
       }
     }
@@ -1146,6 +1336,7 @@ function enemyTurn() {
     const shards = game.currentFloor + 1;
     game.dataShards += shards;
     game.currentFloor++;
+    game.hasSavedCombat = false;
     saveGame();
     sfxVictory();
     game.combat.shardReward = shards;
@@ -1157,6 +1348,13 @@ function enemyTurn() {
   if (c.player.hp <= 0) {
     c.player.hp = 0;
     c.state = 'LOSE';
+    // Save enemy state for rematch
+    game.savedEnemyPhantom   = c.enemy.phantom;
+    game.savedEnemyHp        = c.enemy.hp;
+    game.savedEnemyHeat      = c.enemy.heat;
+    game.savedEnemyOverloaded = c.enemy.overloaded;
+    game.savedCombatFloor    = game.currentFloor;
+    game.hasSavedCombat      = true;
     game.activePhantom = null;
     saveGame();
     sfxDefeat();
@@ -1448,8 +1646,20 @@ function renderCombat() {
   drawText(c.player.hp + '/' + c.player.maxHp, 4, 36);
   drawText(c.enemy.hp + '/' + c.enemy.maxHp, 96, 36);
 
-  // VS divider
-  drawText('VS', 58, 24);
+  // Class advantage indicator between sprites
+  const adv = getClassAdvantage(c.player.phantom.cls, c.enemy.phantom.cls);
+  if (adv > 1.0) {
+    drawText('>>', 58, 22);
+  } else if (adv < 1.0) {
+    drawText('<<', 58, 22);
+  } else {
+    drawText('==', 58, 22);
+  }
+
+  // Class abbreviations
+  const CLS_SHORT = { BRAWLER: 'BRL', DEFENDER: 'DEF', GLITCH: 'GLI' };
+  drawText(CLS_SHORT[c.player.phantom.cls], 30, 26);
+  drawText(CLS_SHORT[c.enemy.phantom.cls], 80, 26);
 
   // === Combat log line ===
   drawLine(0, 42, 127, 42);
@@ -1458,33 +1668,24 @@ function renderCombat() {
     drawText(lastLog.substring(0, 25), 2, 44);
   }
 
-  // === BOTTOM: Action menu (rows 50-63) ===
-  drawLine(0, 50, 127, 50);
+  // === BOTTOM: Action menu (rows 49-63) ===
+  drawLine(0, 49, 127, 49);
 
   if (c.state === 'PLAYER_TURN') {
-    const actions = [
-      { label: 'ATK', hint: 'HIT  +20h', dpad: 'UP' },
-      { label: 'BURST', hint: 'x1.5 +35h', dpad: 'RT' },
-      { label: 'DEF', hint: 'BLOCK -30h', dpad: 'DN' },
-    ];
-    const positions = [
-      { x: 2,  y: 52 },
-      { x: 44, y: 52 },
-      { x: 86, y: 52 },
-    ];
-    for (let i = 0; i < 3; i++) {
+    /* 2x2 grid: STRIKE  SURGE / GUARD  REV */
+    const acts = ["STRIKE", "SURGE", "GUARD", "REV"];
+    const px = [12, 68, 12, 68];
+    const py = [51, 51, 58, 58];
+
+    for (let i = 0; i < 4; i++) {
       if (i === game.cursor) {
-        const w = (actions[i].dpad.length + 1 + actions[i].label.length) * CHAR_W + 4;
-        drawRect(positions[i].x, positions[i].y - 1, w, 6, true);
-        drawText(actions[i].dpad + ':' + actions[i].label, positions[i].x + 2, positions[i].y, true);
+        const w = acts[i].length * CHAR_W + 4;
+        drawRect(px[i], py[i] - 1, w, 7, true);
+        drawText(acts[i], px[i] + 2, py[i], true);
       } else {
-        drawText(actions[i].dpad + ':' + actions[i].label, positions[i].x + 2, positions[i].y);
+        drawText(acts[i], px[i] + 2, py[i]);
       }
     }
-
-    // Hint line: show what the selected action's heat effect is
-    const sel = actions[game.cursor];
-    drawTextCentered(sel.hint, 59);
 
     // Heat danger — flash frame around heat bars
     if (c.player.heat >= 70 && game.tick % 16 < 8) {
@@ -1554,7 +1755,7 @@ function renderDefeat() {
 
 function renderCamp() {
   clearBuffer();
-  const items = ['UPGRADE STATS','COLLECTION','BACK'];
+  const items = ['UPGRADE STATS','COLLECTION','COMBAT INFO','BACK'];
   drawText('CAMP', 2, 2);
   drawText('$' + game.dataShards, 80, 2);
   drawLine(0, 9, 127, 9);
@@ -1571,6 +1772,65 @@ function renderCamp() {
   }
 
   if (game.message && game.messageTimer > 0) renderMessageOverlay();
+  flushBuffer();
+}
+
+function renderInfo() {
+  clearBuffer();
+  drawLine(0, 9, 127, 9);
+  
+  drawText('COMBAT INFO', 2, 2);
+  drawText('< ' + (game.cursor + 1) + '/3 >', 90, 2);
+
+  if (game.cursor === 0) {
+    /* Page 1: Triangle diagram */
+    drawTextCentered('BRAWLER', 14);
+    drawText('GLITCH', 10, 38);
+    drawText('DEFENDER', 78, 38);
+
+    /* Arrows */
+    /* BRAWLER -> GLITCH (down-left) */
+    drawLine(54, 21, 30, 35);
+    drawLine(30, 35, 30, 32);
+    drawLine(30, 35, 34, 35);
+
+    /* GLITCH -> DEFENDER (right) */
+    drawLine(42, 40, 74, 40);
+    drawLine(74, 40, 71, 38);
+    drawLine(74, 40, 71, 42);
+
+    /* DEFENDER -> BRAWLER (up-left) */
+    drawLine(92, 35, 68, 21);
+    drawLine(68, 21, 68, 24);
+    drawLine(68, 21, 72, 21);
+
+    drawTextCentered('ADVANTAGE DEALS 1.3X DAMAGE', 48);
+    drawTextCentered('DISADVANTAGE DEALS 0.8X DMG', 56);
+  } else if (game.cursor === 1) {
+    /* Page 2: Actions */
+    drawText('UP:STRIKE', 2, 13);
+    drawText('1.0X, +20H', 52, 13);
+
+    drawText('RT:SURGE', 2, 23);
+    drawText('1.5X, +35H', 52, 23);
+
+    drawText('DN:GUARD', 2, 33);
+    drawText('BLOCK, -30H', 52, 33);
+
+    drawText('LT:REV', 2, 43);
+    drawText('0.3X, +10H/+20F', 52, 43);
+
+    drawTextCentered('OVERLOAD AT 100 HEAT (8% DMG)', 55);
+  } else {
+    /* Page 3: Stats */
+    drawText('HP : HEALTH POINTS', 2, 13);
+    drawText('ATK: BASE DAMAGE MULTIPLIER', 2, 23);
+    drawText('DEF: REDUCES DAMAGE TAKEN', 2, 33);
+    drawText('SPD: ACT FIRST & CRIT RATE', 2, 43);
+
+    drawTextCentered('COOLING: SPD/2 PER ACTION', 55);
+  }
+
   flushBuffer();
 }
 
@@ -1686,6 +1946,7 @@ function render() {
     case 'VICTORY':    renderVictory(); break;
     case 'DEFEAT':     renderDefeat(); break;
     case 'CAMP':       renderCamp(); break;
+    case 'INFO':       renderInfo(); break;
     case 'UPGRADE':    renderUpgrade(); break;
     case 'COLLECTION': renderCollection(); break;
   }
