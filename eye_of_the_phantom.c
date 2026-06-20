@@ -156,13 +156,21 @@ typedef struct {
     /* Scan workers */
     InfraredWorker*   ir_worker;
     bool              ir_running;
-    bool              ir_done;       /* signal captured, needs processing */
+    volatile bool     ir_done;       /* signal captured, needs processing */
     Nfc*              nfc;
     NfcDevice*        nfc_device;
     NfcPoller*        nfc_poller;
     bool              nfc_running;
-    bool              nfc_done;      /* NFC tag detected, needs processing */
+    volatile bool     nfc_done;      /* NFC tag detected, needs processing */
     uint16_t          scan_timer;    /* timeout counter */
+
+    /* IR signal buffering and repeat tracking */
+    volatile bool     ir_signal_received;
+    InfraredMessage   last_received_msg;
+    InfraredMessage   last_processed_msg;
+    uint8_t           ir_repeat_count;
+    uint8_t           ir_timeout_timer;
+
     Scene       scene;
     Phantom     pending_phantom;
     Phantom     active_phantom;
@@ -255,7 +263,7 @@ static void phantom_build_sprite(Phantom* p) {
  * ================================================================ */
 
 static void phantom_generate(Phantom* p, SignalProtocol proto,
-                              uint32_t address, uint32_t command) {
+                              uint32_t address, uint32_t command, bool is_elite) {
     PhantomClass cls;
     switch(proto) {
         case PROTO_NEC:     cls = CLASS_BRAWLER;  break;
@@ -280,7 +288,14 @@ static void phantom_generate(Phantom* p, SignalProtocol proto,
     p->protocol = proto;
     p->address  = address;
     p->command  = command;
-    p->is_elite = false;
+    p->is_elite = is_elite;
+
+    if(is_elite) {
+        p->stats.hp  = (int16_t)(p->stats.hp  * 1.2f);
+        p->stats.atk = (int16_t)(p->stats.atk * 1.2f);
+        p->stats.def = (int16_t)(p->stats.def * 1.2f);
+        p->stats.spd = (int16_t)(p->stats.spd * 1.2f);
+    }
 
     /* Sprite parts from address bits */
     phantom_sprite_indices_from_address(
@@ -290,8 +305,8 @@ static void phantom_generate(Phantom* p, SignalProtocol proto,
 
     /* Procedural name — 32×16 = 512 unique names from part indices */
     uint16_t combo = p->head_idx + p->body_idx * 8 + p->feet_idx * 64;
-    snprintf(p->name, PHANTOM_NAME_LEN, "%s%s",
-             NAME_A[combo % 32], NAME_B[combo / 32]);
+    snprintf(p->name, PHANTOM_NAME_LEN, "%s%s%s",
+             NAME_A[combo % 32], NAME_B[combo / 32], is_elite ? "*" : "");
 
     memset(&p->upgrades, 0, sizeof(p->upgrades));
 }
@@ -311,7 +326,7 @@ static void phantom_generate_enemy(Phantom* p, uint16_t floor) {
     uint32_t addr = prng_next() & 0xFFFF;
     uint32_t cmd  = prng_next() & 0xFF;
 
-    phantom_generate(p, proto, addr, cmd);
+    phantom_generate(p, proto, addr, cmd, false);
 
     /* Prefix name */
     char orig[PHANTOM_NAME_LEN];
@@ -380,6 +395,9 @@ static void combat_set_turn_order(Combat* c, uint16_t floor,
 }
 
 static void combat_start(EyePhantomApp* app) {
+    /* Seed the PRNG with a randomized value to avoid dead state 0 and ensure unique outcomes */
+    prng_seed((furi_hal_rtc_get_timestamp() + app->tick) | 1);
+
     Combat* c = &app->combat;
     app->cursor = 0;
 
@@ -796,8 +814,8 @@ static void game_save(EyePhantomApp* app) {
     File* file = storage_file_alloc(storage);
     if(storage_file_open(file, SAVE_FILE, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
         storage_file_write(file, &data, sizeof(data));
+        storage_file_close(file);
     }
-    storage_file_close(file);
     storage_file_free(file);
     furi_record_close(RECORD_STORAGE);
 }
@@ -841,8 +859,8 @@ static bool game_load(EyePhantomApp* app) {
             }
             ok = true;
         }
+        storage_file_close(file);
     }
-    storage_file_close(file);
     storage_file_free(file);
     furi_record_close(RECORD_STORAGE);
     return ok;
@@ -878,13 +896,13 @@ static void ir_callback(void* context, InfraredWorkerSignal* signal) {
     EyePhantomApp* app = (EyePhantomApp*)context;
     if(!signal || !app->ir_running || app->ir_done) return;
 
-    /* Generate phantom — processing deferred to tick to avoid reentrant stop */
-    uint32_t seed = furi_hal_rtc_get_timestamp();
-    uint32_t addr = seed & 0xFFFF;
-    uint32_t cmd  = (seed >> 16) & 0xFF;
-
-    phantom_generate(&app->pending_phantom, PROTO_NEC, addr, cmd);
-    app->ir_done = true;
+    if(infrared_worker_signal_is_decoded(signal)) {
+        const InfraredMessage* msg = infrared_worker_get_decoded_signal(signal);
+        if(msg) {
+            app->last_received_msg = *msg;
+            app->ir_signal_received = true;
+        }
+    }
 }
 
 static void scan_ir_start(EyePhantomApp* app) {
@@ -896,7 +914,15 @@ static void scan_ir_start(EyePhantomApp* app) {
     app->ir_done = false;
     app->scan_timer = 0;
     app->ir_running = true;
+
+    /* Initialize tracking variables for Deep Scan repeat detection */
+    app->ir_signal_received = false;
+    app->ir_repeat_count = 0;
+    app->ir_timeout_timer = 0;
+    memset(&app->last_processed_msg, 0, sizeof(app->last_processed_msg));
+
     infrared_worker_rx_set_received_signal_callback(app->ir_worker, ir_callback, app);
+    infrared_worker_rx_enable_signal_decoding(app->ir_worker, true);
     infrared_worker_rx_start(app->ir_worker);
 }
 
@@ -951,7 +977,7 @@ static NfcCommand nfc_poller_callback(NfcGenericEvent event, void* context) {
     cmd *= 0x45D9F3B;
     cmd ^= cmd >> 16;
 
-    phantom_generate(&app->pending_phantom, PROTO_NFC, addr, cmd);
+    phantom_generate(&app->pending_phantom, PROTO_NFC, addr, cmd, false);
     app->nfc_done = true;
     return NfcCommandStop;
 }
@@ -1344,19 +1370,19 @@ static void render_combat(Canvas* c, EyePhantomApp* app) {
     draw_str(c, "YOU", 1, 1);
     draw_hbar(c, 20, 1, 42, 5, (float)co->player.hp / co->player.max_hp);
     draw_str(c, "FOE", 68, 1);
-    draw_hbar(c, 88, 1, 38, 5, (float)co->enemy.hp / co->enemy.max_hp);
+    draw_hbar(c, 85, 1, 42, 5, (float)co->enemy.hp / co->enemy.max_hp);
 
     /* Heat bars (rows 7-11) */
     draw_str(c, "H", 1, 8);
     draw_hbar(c, 8, 8, 54, 4, (float)co->player.heat / MAX_HEAT);
     draw_str(c, "H", 68, 8);
-    draw_hbar(c, 76, 8, 50, 4, (float)co->enemy.heat / MAX_HEAT);
+    draw_hbar(c, 73, 8, 54, 4, (float)co->enemy.heat / MAX_HEAT);
 
     /* Heat danger flash */
     if(co->player.heat >= HEAT_DANGER_THRESHOLD && (t % 16 < 8))
         canvas_draw_frame(c, 6, 7, 58, 6);
     if(co->enemy.heat >= HEAT_DANGER_THRESHOLD && (t % 16 < 8))
-        canvas_draw_frame(c, 74, 7, 54, 6);
+        canvas_draw_frame(c, 71, 7, 56, 6);
 
     canvas_draw_line(c, 0, 13, 127, 13);
 
@@ -2004,12 +2030,63 @@ static void app_tick(void* context) {
     EyePhantomApp* app = (EyePhantomApp*)context;
     app->tick++;
 
+    /* Process IR signal repeat buffering and timeout check */
+    if(app->ir_running && !app->ir_done) {
+        if(app->ir_signal_received) {
+            app->ir_signal_received = false;
+            
+            // Check if it matches the last processed IR signal (repeat)
+            if(app->ir_repeat_count > 0 &&
+               app->last_received_msg.protocol == app->last_processed_msg.protocol &&
+               app->last_received_msg.address == app->last_processed_msg.address &&
+               app->last_received_msg.command == app->last_processed_msg.command) {
+                app->ir_repeat_count++;
+            } else {
+                app->ir_repeat_count = 1;
+                app->last_processed_msg = app->last_received_msg;
+            }
+            
+            // Set/Reset timeout timer (approx 330ms at 30fps)
+            app->ir_timeout_timer = 10;
+            
+            // If we hit 10 repeats, stop immediately to feel snappy
+            if(app->ir_repeat_count >= 10) {
+                app->ir_timeout_timer = 0;
+                app->ir_done = true;
+            }
+        }
+
+        // Decrement timeout timer
+        if(app->ir_timeout_timer > 0) {
+            app->ir_timeout_timer--;
+            if(app->ir_timeout_timer == 0) {
+                // Timeout reached, finalize scan
+                app->ir_done = true;
+            }
+        }
+    }
+
     /* Process IR signal captured in callback (safe to stop worker here) */
     if(app->ir_done) {
         app->ir_done = false;
         scan_ir_stop(app);
         /* Stop NFC too — one phantom at a time */
         if(app->nfc_running) scan_nfc_stop(app);
+
+        // Map Flipper IR protocol to game SignalProtocol
+        SignalProtocol proto = PROTO_RC5;
+        if(app->last_processed_msg.protocol == InfraredProtocolNEC) {
+            proto = PROTO_NEC;
+        } else if(app->last_processed_msg.protocol == InfraredProtocolSIRC) {
+            proto = PROTO_SONY;
+        } else if(app->last_processed_msg.protocol == InfraredProtocolSamsung32) {
+            proto = PROTO_SAMSUNG;
+        }
+
+        // Generate phantom, determining if it is Elite based on repeat count
+        bool is_elite = (app->ir_repeat_count >= 10);
+        phantom_generate(&app->pending_phantom, proto, app->last_processed_msg.address, app->last_processed_msg.command, is_elite);
+
         app->scene = SCENE_SUMMON;
         app->summon_reveal = true;
         app->reveal_timer = 0;
@@ -2124,6 +2201,10 @@ static EyePhantomApp* app_alloc(void) {
 
     app->scene     = SCENE_TITLE;
     app->running   = true;
+    app->current_floor = 1;
+
+    /* Initialize PRNG with non-zero seed */
+    prng_seed(furi_hal_rtc_get_timestamp() | 1);
 
     return app;
 }
