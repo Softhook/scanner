@@ -36,6 +36,12 @@
 
 #define PHANTOM_NAME_LEN      16
 #define COMBAT_LOG_LEN        32
+#define MAX_HEAT              100
+#define COMBAT_DELAY_TICKS    45
+#define GUARD_COOLING         30
+#define OVERLOAD_HEAT_PENALTY 50
+#define OVERLOAD_DMG_PCT      8
+#define HEAT_DANGER_THRESHOLD 70   /* 70% heat = danger flash */
 
 /* ================================================================
  * TYPES
@@ -69,11 +75,12 @@ typedef enum {
     PROTO_RC5
 } SignalProtocol;
 
-typedef struct {
-    uint8_t head_idx;
-    uint8_t body_idx;
-    uint8_t feet_idx;
-} SpriteParts;
+typedef enum {
+    ACTION_STRIKE  = 0,
+    ACTION_SURGE   = 1,
+    ACTION_GUARD   = 2,
+    ACTION_REVERSE = 3,
+} CombatAction;
 
 typedef struct {
     char     name[PHANTOM_NAME_LEN];
@@ -136,7 +143,6 @@ typedef struct {
 typedef struct {
     /* Flipper Zero subsystems */
     Gui*              gui;
-    View*             view;
     ViewPort*         view_port;
     NotificationApp*  notifications;
     Storage*          storage;
@@ -156,7 +162,6 @@ typedef struct {
     uint32_t    data_shards;
     uint16_t    current_floor;
     uint8_t     cursor;
-    uint8_t     max_cursor;
     uint32_t    tick;
     Combat      combat;
     uint8_t     collection_idx;
@@ -254,9 +259,8 @@ static void phantom_generate(Phantom* p, SignalProtocol proto,
     p->is_elite = false;
 
     /* Sprite parts from address bits */
-    p->head_idx = address & 0x03;
-    p->body_idx = (address >> 2) & 0x03;
-    p->feet_idx = (address >> 4) & 0x03;
+    phantom_sprite_indices_from_address(
+        (uint16_t)address, &p->head_idx, &p->body_idx, &p->feet_idx);
 
     phantom_build_sprite(p);
 
@@ -336,14 +340,30 @@ static void combat_init_unit(CombatUnit* unit, Phantom* phantom) {
     unit->stats.spd  = spd;
 }
 
+/* Shared turn-order setup: decides who goes first based on SPD */
+static void combat_set_turn_order(Combat* c, uint16_t floor,
+                                   const char* foe_fast_msg, const char* player_first_msg) {
+    c->floor = floor;
+    c->delay_timer = 0;
+
+    if(c->enemy.stats.spd > c->player.stats.spd) {
+        c->state = COMBAT_ENEMY_TURN;
+        snprintf(c->log, COMBAT_LOG_LEN, foe_fast_msg, floor);
+    } else {
+        c->state = COMBAT_PLAYER_TURN;
+        snprintf(c->log, COMBAT_LOG_LEN, player_first_msg, floor);
+    }
+}
+
 static void combat_start(EyePhantomApp* app) {
     Combat* c = &app->combat;
+    app->cursor = 0;
+
+    combat_init_unit(&c->player, &app->active_phantom);
 
     /* Check for a saved (damaged) enemy on this floor */
     if(app->has_saved_combat && app->saved_combat_floor == app->current_floor) {
-        combat_init_unit(&c->player, &app->active_phantom);
-
-        /* Restore saved enemy */
+        /* Restore saved enemy with its damaged state */
         c->enemy.phantom = app->saved_enemy_phantom;
         int16_t hp, atk, def, spd;
         phantom_get_effective(&app->saved_enemy_phantom, &hp, &atk, &def, &spd);
@@ -358,49 +378,27 @@ static void combat_start(EyePhantomApp* app) {
         c->enemy.stats.spd  = spd;
 
         app->has_saved_combat = false;
-        c->floor = app->current_floor;
-        app->cursor = 0;
-        c->delay_timer = 0;
-
-        /* SPD-based turn order */
-        if(c->enemy.stats.spd > c->player.stats.spd) {
-            c->state = COMBAT_ENEMY_TURN;
-            snprintf(c->log, COMBAT_LOG_LEN, "F%u REMATCH-FOE FAST", app->current_floor);
-        } else {
-            c->state = COMBAT_PLAYER_TURN;
-            snprintf(c->log, COMBAT_LOG_LEN, "F%u - REMATCH!", app->current_floor);
-        }
+        combat_set_turn_order(c, app->current_floor,
+            "F%u REMATCH-FOE FAST", "F%u - REMATCH!");
         return;
     }
 
+    /* New enemy for this floor */
     Phantom enemy;
     phantom_generate_enemy(&enemy, app->current_floor);
-
-    combat_init_unit(&c->player, &app->active_phantom);
     combat_init_unit(&c->enemy, &enemy);
 
     app->has_saved_combat = false;
-    c->floor = app->current_floor;
-    app->cursor = 0;
-    c->delay_timer = 0;
-
-    /* SPD-based turn order */
-    if(c->enemy.stats.spd > c->player.stats.spd) {
-        c->state = COMBAT_ENEMY_TURN;
-        snprintf(c->log, COMBAT_LOG_LEN, "F%u - FOE IS FASTER!", app->current_floor);
-    } else {
-        c->state = COMBAT_PLAYER_TURN;
-        snprintf(c->log, COMBAT_LOG_LEN, "F%u - FIGHT!", app->current_floor);
-    }
+    combat_set_turn_order(c, app->current_floor,
+        "F%u - FOE IS FASTER!", "F%u - FIGHT!");
 }
 
-/* action_type: 0=strike(1.0x), 1=surge(1.5x), 3=reverse(0.3x) */
 static int16_t combat_calc_damage(CombatUnit* attacker, CombatUnit* defender,
-                                   uint8_t action_type, bool* out_crit) {
+                                   CombatAction action_type, bool* out_crit) {
     int32_t base;
-    if(action_type == 1) {
+    if(action_type == ACTION_SURGE) {
         base = (int32_t)attacker->stats.atk * 3 / 2;     /* Surge: 1.5x */
-    } else if(action_type == 3) {
+    } else if(action_type == ACTION_REVERSE) {
         base = (int32_t)attacker->stats.atk * 3 / 10;    /* Reverse: 0.3x */
         if(base < 1) base = 1;
     } else {
@@ -440,94 +438,174 @@ static void combat_unit_add_heat(CombatUnit* unit, int16_t base_heat) {
     unit->heat += heat;
 }
 
-static void combat_player_action(EyePhantomApp* app, uint8_t action) {
+/* ------------------------------------------------------------------
+ * Shared helpers: overload skip, action execution, overload check,
+ * death check — used by both player and enemy turn handlers.
+ * ------------------------------------------------------------------ */
+
+/* Handle "unit was overloaded last turn, skip this turn" */
+static void combat_handle_overload_skip(CombatUnit* unit, char* log, size_t log_len,
+                                         const char* prefix) {
+    snprintf(log, log_len, "%sOVERLOADED!", prefix);
+    unit->overloaded = false;
+    unit->heat = unit->heat > OVERLOAD_HEAT_PENALTY
+                 ? unit->heat - OVERLOAD_HEAT_PENALTY : 0;
+}
+
+/* Apply a damage-dealing action (strike/surge/reverse).
+ * action is ACTION_STRIKE, ACTION_SURGE, or ACTION_REVERSE.
+ * Returns the raw damage dealt (before overload deductions). */
+static int16_t combat_apply_attack(CombatUnit* attacker, CombatUnit* defender,
+                                    CombatAction action, bool* out_crit) {
+    bool crit;
+    int16_t dmg = combat_calc_damage(attacker, defender, action, &crit);
+    if(defender->defending) { dmg /= 2; defender->defending = false; }
+    defender->hp -= dmg;
+    if(out_crit) *out_crit = crit;
+
+    /* Self-heat per action type */
+    uint8_t base_heat = (action == ACTION_STRIKE)  ? 20 :
+                        (action == ACTION_SURGE)   ? 35 : 10;
+    combat_unit_add_heat(attacker, base_heat);
+
+    /* Reverse transfers extra heat to foe */
+    if(action == ACTION_REVERSE) {
+        defender->heat += 20;
+    }
+    return dmg;
+}
+
+/* Check a unit for overload (heat >= MAX_HEAT). Returns overload damage or 0. */
+static int16_t combat_check_overload(CombatUnit* unit) {
+    if(unit->heat >= MAX_HEAT) {
+        unit->overloaded = true;
+        unit->heat = MAX_HEAT;
+        int16_t ov_dmg = unit->max_hp * OVERLOAD_DMG_PCT / 100;
+        unit->hp -= ov_dmg;
+        return ov_dmg;
+    }
+    return 0;
+}
+
+/* After an action, check deaths and set up delay transition.
+ * `check_enemy_first` controls priority when both die simultaneously
+ * (player's turn → player first; enemy's turn → enemy first, matching
+ * the original "self-inflicted overload death" priority). */
+static bool combat_resolve_turn(Combat* c, bool check_enemy_first,
+                                 CombatState on_player_death,
+                                 CombatState on_enemy_death,
+                                 CombatState next_turn) {
+    bool player_dead = (c->player.hp <= 0);
+    bool enemy_dead  = (c->enemy.hp <= 0);
+
+    if(check_enemy_first) {
+        if(enemy_dead)       { c->enemy.hp = 0; c->next_state = on_enemy_death; }
+        else if(player_dead) { c->player.hp = 0; c->next_state = on_player_death; }
+        else                 { c->next_state = next_turn; }
+    } else {
+        if(player_dead)      { c->player.hp = 0; c->next_state = on_player_death; }
+        else if(enemy_dead)  { c->enemy.hp = 0; c->next_state = on_enemy_death; }
+        else                 { c->next_state = next_turn; }
+    }
+
+    if(c->next_state == next_turn) return false;
+    c->delay_timer = COMBAT_DELAY_TICKS;
+    c->state = COMBAT_DELAY;
+    return true;
+}
+
+/* ------------------------------------------------------------------
+ * Combat action tables — damage descriptions and heat costs.
+ * ------------------------------------------------------------------ */
+
+static const char* ACTION_LOG_PLAYER[] = {
+    "STRIKE:%d%s",         /* STRIKE */
+    "SURGE:%d%s",          /* SURGE  */
+    "GUARD! -30 HEAT",     /* GUARD  */
+    "REV:%d +20H%s",       /* REVERSE (no foe overload) */
+};
+static const char* ACTION_LOG_ENEMY[] = {
+    "FOE STR:%d%s",        /* STRIKE */
+    "FOE SRG:%d%s",        /* SURGE  */
+    "FOE GUARDS",          /* GUARD  */
+    "FOE REV:%d +20H",     /* REVERSE (no foe overload) */
+};
+
+/* ------------------------------------------------------------------
+ * PLAYER TURN
+ * ------------------------------------------------------------------ */
+
+static void combat_player_action(EyePhantomApp* app, CombatAction action) {
     Combat* c = &app->combat;
     if(c->state != COMBAT_PLAYER_TURN) return;
 
     c->player.defending = false;
 
+    /* Overloaded — skip this turn */
     if(c->player.overloaded) {
-        snprintf(c->log, COMBAT_LOG_LEN, "OVERLOADED!");
-        c->player.overloaded = false;
-        c->player.heat = c->player.heat > 50 ? c->player.heat - 50 : 0;
-    } else {
-        switch(action) {
-            case 0: { /* STRIKE */
-                bool crit;
-                int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 0, &crit);
-                if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
-                c->enemy.hp -= dmg;
-                combat_unit_add_heat(&c->player, 20);
-                snprintf(c->log, COMBAT_LOG_LEN, "STRIKE:%d%s", dmg, crit ? " CRIT!" : "");
-                break;
-            }
-            case 1: { /* SURGE */
-                bool crit;
-                int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 1, &crit);
-                if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
-                c->enemy.hp -= dmg;
-                combat_unit_add_heat(&c->player, 35);
-                snprintf(c->log, COMBAT_LOG_LEN, "SURGE:%d%s", dmg, crit ? " CRIT!" : "");
-                break;
-            }
-            case 2: { /* GUARD */
-                c->player.heat = c->player.heat > 30 ? c->player.heat - 30 : 0;
-                c->player.defending = true;
-                snprintf(c->log, COMBAT_LOG_LEN, "GUARD! -30 HEAT");
-                break;
-            }
-            case 3: { /* REVERSE */
-                bool crit;
-                int16_t dmg = combat_calc_damage(&c->player, &c->enemy, 3, &crit);
-                if(c->enemy.defending) { dmg /= 2; c->enemy.defending = false; }
-                c->enemy.hp -= dmg;
-                combat_unit_add_heat(&c->player, 10);
-                c->enemy.heat += 20;
-                /* Check enemy overload from heat transfer */
-                if(c->enemy.heat >= 100) {
-                    c->enemy.overloaded = true;
-                    c->enemy.heat = 100;
-                    int16_t ov = c->enemy.max_hp * 8 / 100;
-                    c->enemy.hp -= ov;
-                    snprintf(c->log, COMBAT_LOG_LEN, "REV! FOE OVLD -%d", ov);
-                } else {
-                    snprintf(c->log, COMBAT_LOG_LEN, "REV:%d +20H%s", dmg, crit ? " CR" : "");
-                }
-                break;
-            }
+        combat_handle_overload_skip(&c->player, c->log, COMBAT_LOG_LEN, "");
+        goto check_deaths;
+    }
+
+    if(action == ACTION_GUARD) {
+        c->player.heat = c->player.heat > GUARD_COOLING
+                         ? c->player.heat - GUARD_COOLING : 0;
+        c->player.defending = true;
+        snprintf(c->log, COMBAT_LOG_LEN, "%s", ACTION_LOG_PLAYER[ACTION_GUARD]);
+        goto check_overload;
+    }
+
+    /* Striking / Surging / Reversing */
+    bool crit;
+    int16_t dmg = combat_apply_attack(&c->player, &c->enemy, action, &crit);
+    int16_t foe_ov = 0;
+
+    /* Reverse: check if foe overloaded from heat transfer immediately */
+    if(action == ACTION_REVERSE) {
+        foe_ov = combat_check_overload(&c->enemy);
+        if(foe_ov) {
+            snprintf(c->log, COMBAT_LOG_LEN, "REV! FOE OVLD -%d", foe_ov);
+        } else {
+            snprintf(c->log, COMBAT_LOG_LEN, ACTION_LOG_PLAYER[ACTION_REVERSE],
+                     dmg, crit ? " CR" : "");
         }
+    } else {
+        snprintf(c->log, COMBAT_LOG_LEN, ACTION_LOG_PLAYER[action], dmg,
+                 crit ? " CRIT!" : "");
     }
 
-    /* Check player overload */
-    if(c->player.heat >= 100) {
-        c->player.overloaded = true;
-        c->player.heat = 100;
-        int16_t ov_dmg = c->player.max_hp * 8 / 100;
-        c->player.hp -= ov_dmg;
-        snprintf(c->log, COMBAT_LOG_LEN, "OVERLOAD! -%d", ov_dmg);
+check_overload:
+    /* Player overload from self-heat */
+    {
+        int16_t ov = combat_check_overload(&c->player);
+        if(ov) snprintf(c->log, COMBAT_LOG_LEN, "OVERLOAD! -%d", ov);
     }
 
-    /* Check player defeat from overload */
-    if(c->player.hp <= 0) {
-        c->player.hp = 0;
-        c->next_state = COMBAT_LOSE;
-        c->delay_timer = 45; /* ~1.5s delay */
-        c->state = COMBAT_DELAY;
-        return;
-    }
+check_deaths:
+    /* Player's turn: check player death first (self-overload priority) */
+    combat_resolve_turn(c, false, COMBAT_LOSE, COMBAT_WIN, COMBAT_ENEMY_TURN);
+}
 
-    /* Check enemy defeat */
-    if(c->enemy.hp <= 0) {
-        c->enemy.hp = 0;
-        c->next_state = COMBAT_WIN;
-        c->delay_timer = 45; /* ~1.5s delay */
-        c->state = COMBAT_DELAY;
-        return;
-    }
+/* ------------------------------------------------------------------
+ * ENEMY TURN (AI)
+ * ------------------------------------------------------------------ */
 
-    c->next_state = COMBAT_ENEMY_TURN;
-    c->delay_timer = 45; /* ~1.5s delay */
-    c->state = COMBAT_DELAY;
+static CombatAction combat_ai_pick_action(const CombatUnit* enemy) {
+    uint8_t roll = prng_next() % 100;
+    if(enemy->heat >= 80) {
+        /* 5/0/70/25 — never Surge near overload */
+        return (roll < 5) ? ACTION_STRIKE : (roll < 75) ? ACTION_GUARD : ACTION_REVERSE;
+    } else if(enemy->heat >= 50) {
+        /* 20/5/50/25 */
+        return (roll < 20) ? ACTION_STRIKE :
+               (roll < 25) ? ACTION_SURGE  :
+               (roll < 75) ? ACTION_GUARD  : ACTION_REVERSE;
+    } else {
+        /* 50/15/10/25 */
+        return (roll < 50) ? ACTION_STRIKE :
+               (roll < 65) ? ACTION_SURGE  :
+               (roll < 75) ? ACTION_GUARD  : ACTION_REVERSE;
+    }
 }
 
 static void combat_enemy_action(EyePhantomApp* app) {
@@ -536,103 +614,49 @@ static void combat_enemy_action(EyePhantomApp* app) {
 
     c->enemy.defending = false;
 
+    /* Overloaded — skip this turn */
     if(c->enemy.overloaded) {
-        snprintf(c->log, COMBAT_LOG_LEN, "FOE OVERLOADED!");
-        c->enemy.overloaded = false;
-        c->enemy.heat = c->enemy.heat > 50 ? c->enemy.heat - 50 : 0;
-    } else {
-        /* AI: weighted random based on heat */
-        uint8_t roll = prng_next() % 100;
-        uint8_t action;
+        combat_handle_overload_skip(&c->enemy, c->log, COMBAT_LOG_LEN, "FOE ");
+        goto check_deaths;
+    }
 
-        if(c->enemy.heat >= 80) {
-            /* 5/0/70/25 — never Surge when near overload */
-            action = (roll < 5) ? 0 : (roll < 75) ? 2 : 3;
-        } else if(c->enemy.heat >= 50) {
-            /* 20/5/50/25 */
-            action = (roll < 20) ? 0 : (roll < 25) ? 1 : (roll < 75) ? 2 : 3;
+    CombatAction action = combat_ai_pick_action(&c->enemy);
+
+    if(action == ACTION_GUARD) {
+        c->enemy.heat = c->enemy.heat > GUARD_COOLING
+                        ? c->enemy.heat - GUARD_COOLING : 0;
+        c->enemy.defending = true;
+        snprintf(c->log, COMBAT_LOG_LEN, "%s", ACTION_LOG_ENEMY[ACTION_GUARD]);
+        goto check_overload;
+    }
+
+    bool crit;
+    int16_t dmg = combat_apply_attack(&c->enemy, &c->player, action, &crit);
+    int16_t foe_ov = 0;
+
+    /* Reverse: check if player overloaded from heat transfer immediately */
+    if(action == ACTION_REVERSE) {
+        foe_ov = combat_check_overload(&c->player);
+        if(foe_ov) {
+            snprintf(c->log, COMBAT_LOG_LEN, "FOE REV! OVLD -%d", foe_ov);
         } else {
-            /* 50/15/10/25 */
-            action = (roll < 50) ? 0 : (roll < 65) ? 1 : (roll < 75) ? 2 : 3;
+            snprintf(c->log, COMBAT_LOG_LEN, ACTION_LOG_ENEMY[ACTION_REVERSE], dmg);
         }
-
-        switch(action) {
-            case 0: { /* STRIKE */
-                bool crit;
-                int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 0, &crit);
-                if(c->player.defending) { dmg /= 2; c->player.defending = false; }
-                c->player.hp -= dmg;
-                combat_unit_add_heat(&c->enemy, 20);
-                snprintf(c->log, COMBAT_LOG_LEN, "FOE STR:%d%s", dmg, crit ? " CRIT!" : "");
-                break;
-            }
-            case 1: { /* SURGE */
-                bool crit;
-                int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 1, &crit);
-                if(c->player.defending) { dmg /= 2; c->player.defending = false; }
-                c->player.hp -= dmg;
-                combat_unit_add_heat(&c->enemy, 35);
-                snprintf(c->log, COMBAT_LOG_LEN, "FOE SRG:%d%s", dmg, crit ? " CRIT!" : "");
-                break;
-            }
-            case 2: { /* GUARD */
-                c->enemy.heat = c->enemy.heat > 30 ? c->enemy.heat - 30 : 0;
-                c->enemy.defending = true;
-                snprintf(c->log, COMBAT_LOG_LEN, "FOE GUARDS");
-                break;
-            }
-            case 3: { /* REVERSE */
-                bool crit;
-                int16_t dmg = combat_calc_damage(&c->enemy, &c->player, 3, &crit);
-                if(c->player.defending) { dmg /= 2; c->player.defending = false; }
-                c->player.hp -= dmg;
-                combat_unit_add_heat(&c->enemy, 10);
-                c->player.heat += 20;
-                /* Check player overload from heat transfer */
-                if(c->player.heat >= 100) {
-                    c->player.overloaded = true;
-                    c->player.heat = 100;
-                    int16_t ov = c->player.max_hp * 8 / 100;
-                    c->player.hp -= ov;
-                    snprintf(c->log, COMBAT_LOG_LEN, "FOE REV! OVLD -%d", ov);
-                } else {
-                    snprintf(c->log, COMBAT_LOG_LEN, "FOE REV:%d +20H", dmg);
-                }
-                break;
-            }
-        }
+    } else {
+        snprintf(c->log, COMBAT_LOG_LEN, ACTION_LOG_ENEMY[action], dmg,
+                 crit ? " CRIT!" : "");
     }
 
-    /* Check enemy overload */
-    if(c->enemy.heat >= 100) {
-        c->enemy.overloaded = true;
-        c->enemy.heat = 100;
-        int16_t ov_dmg = c->enemy.max_hp * 8 / 100;
-        c->enemy.hp -= ov_dmg;
-        snprintf(c->log, COMBAT_LOG_LEN, "FOE OVERLOAD! -%d", ov_dmg);
+check_overload:
+    /* Enemy overload from self-heat */
+    {
+        int16_t ov = combat_check_overload(&c->enemy);
+        if(ov) snprintf(c->log, COMBAT_LOG_LEN, "FOE OVERLOAD! -%d", ov);
     }
 
-    /* Check enemy defeat from overload */
-    if(c->enemy.hp <= 0) {
-        c->enemy.hp = 0;
-        c->next_state = COMBAT_WIN;
-        c->delay_timer = 45; /* ~1.5s delay */
-        c->state = COMBAT_DELAY;
-        return;
-    }
-
-    /* Check player defeat */
-    if(c->player.hp <= 0) {
-        c->player.hp = 0;
-        c->next_state = COMBAT_LOSE;
-        c->delay_timer = 45; /* ~1.5s delay */
-        c->state = COMBAT_DELAY;
-        return;
-    }
-
-    c->next_state = COMBAT_PLAYER_TURN;
-    c->delay_timer = 45; /* ~1.5s delay */
-    c->state = COMBAT_DELAY;
+check_deaths:
+    /* Enemy's turn: check enemy death first (self-overload priority) */
+    combat_resolve_turn(c, true, COMBAT_LOSE, COMBAT_WIN, COMBAT_PLAYER_TURN);
 }
 
 /* ================================================================
@@ -927,6 +951,14 @@ static void draw_sprite(Canvas* c, const uint8_t* sprite, int x, int y) {
     canvas_draw_xbm(c, x, y, PHANTOM_SPRITE_W, PHANTOM_SPRITE_H, sprite);
 }
 
+/* Draw sprite with optional invert flash (used for overload animation) */
+static void draw_sprite_invertible(Canvas* c, const uint8_t* sprite,
+                                    int x, int y, bool invert) {
+    if(invert) canvas_invert_color(c);
+    draw_sprite(c, sprite, x, y);
+    if(invert) canvas_invert_color(c);
+}
+
 /* ================================================================
  * SCENE RENDERERS
  * ================================================================ */
@@ -1035,8 +1067,8 @@ static void render_summon(Canvas* c, EyePhantomApp* app) {
             /* Noise reveal */
             for(int y = 0; y < SCREEN_H; y++)
                 for(int x = 0; x < SCREEN_W; x++)
-                    if((rand() % 100) > progress * 70)
-                        if(rand() % 2) canvas_draw_dot(c, x, y);
+                    if((prng_next() % 100) > progress * 70)
+                        if(prng_next() % 2) canvas_draw_dot(c, x, y);
             draw_str_centered(c, "SIGNAL FOUND!", 28);
             return;
         }
@@ -1151,30 +1183,25 @@ static void render_combat(Canvas* c, EyePhantomApp* app) {
 
     /* Heat bars (rows 7-11) */
     draw_str(c, "H", 1, 8);
-    draw_hbar(c, 8, 8, 54, 4, co->player.heat / 100.0f);
+    draw_hbar(c, 8, 8, 54, 4, (float)co->player.heat / MAX_HEAT);
     draw_str(c, "H", 68, 8);
-    draw_hbar(c, 76, 8, 50, 4, co->enemy.heat / 100.0f);
+    draw_hbar(c, 76, 8, 50, 4, (float)co->enemy.heat / MAX_HEAT);
 
     /* Heat danger flash */
-    if(co->player.heat >= 70 && (t % 16 < 8))
+    if(co->player.heat >= HEAT_DANGER_THRESHOLD && (t % 16 < 8))
         canvas_draw_frame(c, 6, 7, 58, 6);
-    if(co->enemy.heat >= 70 && (t % 16 < 8))
+    if(co->enemy.heat >= HEAT_DANGER_THRESHOLD && (t % 16 < 8))
         canvas_draw_frame(c, 74, 7, 54, 6);
 
     canvas_draw_line(c, 0, 13, 127, 13);
 
     /* --- MIDDLE: sprites (rows 14-41) --- */
     int sy = 18;
-    bool p_inv = co->player.overloaded && (t % 6 < 3);
-    bool e_inv = co->enemy.overloaded && (t % 6 < 3);
+    bool p_flash = co->player.overloaded && (t % 6 < 3);
+    bool e_flash = co->enemy.overloaded && (t % 6 < 3);
 
-    if(p_inv) canvas_invert_color(c);
-    draw_sprite(c, co->player.phantom.sprite, 8, sy);
-    if(p_inv) canvas_invert_color(c);
-
-    if(e_inv) canvas_invert_color(c);
-    draw_sprite(c, co->enemy.phantom.sprite, 104, sy);
-    if(e_inv) canvas_invert_color(c);
+    draw_sprite_invertible(c, co->player.phantom.sprite, 8, sy, p_flash);
+    draw_sprite_invertible(c, co->enemy.phantom.sprite, 104, sy, e_flash);
 
     /* HP readouts below sprites */
     char buf[20];
@@ -1276,7 +1303,7 @@ static void render_defeat(Canvas* c, EyePhantomApp* app) {
         for(int y = 0; y < 16; y++)
             for(int x = 0; x < 16; x++)
                 if(app->active_phantom.sprite[y * 2 + x / 8] & (1 << (x % 8)))
-                    if(rand() % 10 > 3)
+                    if(prng_next() % 10 > 3)
                         canvas_draw_dot(c, 56 + x, 22 + y);
     }
 
@@ -1397,6 +1424,7 @@ static void render_info(Canvas* c, EyePhantomApp* app) {
     canvas_clear(c);
     canvas_draw_line(c, 0, 9, 127, 9);
     
+    char buf[32];
     char title_buf[32];
     snprintf(title_buf, sizeof(title_buf), "< %d/3 >", (int)app->cursor + 1);
     draw_str(c, "COMBAT INFO", 2, 2);
@@ -1440,7 +1468,9 @@ static void render_info(Canvas* c, EyePhantomApp* app) {
         draw_str(c, "LT:REV", 2, 43);
         draw_str(c, "0.3X, +10H/+20F", 48, 43);
 
-        draw_str_centered(c, "100 HEAT = OVERLOAD (8%HP)", 55);
+        snprintf(buf, sizeof(buf), "%d HEAT = OVERLOAD (%d%%HP)",
+                 MAX_HEAT, OVERLOAD_DMG_PCT);
+        draw_str_centered(c, buf, 55);
     } else {
         /* Page 3: Stats */
         draw_str(c, "HP : HEALTH POINTS", 2, 13);
@@ -1638,9 +1668,6 @@ static void app_input(InputEvent* event, void* context) {
         case SCENE_VICTORY:
         case SCENE_DEFEAT: {
             if(key == InputKeyOk && is_act) {
-                if(app->scene == SCENE_DEFEAT) {
-                    /* Phantom already wiped in combat loss handler */
-                }
                 app->scene = SCENE_MENU;
             }
             break;
