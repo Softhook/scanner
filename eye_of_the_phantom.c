@@ -295,7 +295,7 @@ static void phantom_generate_enemy(Phantom* p, uint16_t floor) {
     prng_seed(floor * 2654435761u);
     uint8_t pi = prng_next() % 3;
     SignalProtocol proto = (SignalProtocol)pi;
-    uint32_t addr = prng_next() & 0xFF;
+    uint32_t addr = prng_next() & 0xFFFF;
     uint32_t cmd  = prng_next() & 0xFF;
 
     phantom_generate(p, proto, addr, cmd);
@@ -867,8 +867,8 @@ static void ir_callback(void* context, InfraredWorkerSignal* signal) {
 
     /* Generate phantom — processing deferred to tick to avoid reentrant stop */
     uint32_t seed = furi_hal_rtc_get_timestamp();
-    uint32_t addr = seed & 0xFF;
-    uint32_t cmd  = (seed >> 8) & 0xFF;
+    uint32_t addr = seed & 0xFFFF;
+    uint32_t cmd  = (seed >> 16) & 0xFF;
 
     phantom_generate(&app->pending_phantom, PROTO_NEC, addr, cmd);
     app->ir_done = true;

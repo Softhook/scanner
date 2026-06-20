@@ -230,8 +230,8 @@
 
   .options-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 10px;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 6px;
   }
 
   .option-btn {
@@ -520,8 +520,7 @@
 
   <div class="toggle-container">
     <div class="set-toggle">
-      <button class="toggle-btn active classic" id="btn-toggle-classic" onclick="setSpriteSet('classic')">Classic Phantoms</button>
-      <button class="toggle-btn cute" id="btn-toggle-cute" onclick="setSpriteSet('cute')">Proposed Cute Set</button>
+      <button class="toggle-btn active classic" disabled>Combined Set (8 parts each)</button>
     </div>
   </div>
 
@@ -529,8 +528,8 @@
     <!-- Builder Card -->
     <div class="card" id="main-editor-card">
       <div class="card-title">
-        <span id="editor-set-name">Classic Sprite Set</span>
-        <span class="badge" id="editor-set-badge">Default</span>
+        <span id="editor-set-name">Combined Sprite Set (8 Heads × 8 Bodies × 8 Feet)</span>
+        <span class="badge proposed" id="editor-set-badge" style="background:var(--accent);">512 Combos</span>
       </div>
 
       <div class="builder-section">
@@ -633,7 +632,7 @@
   <div class="tabs-container">
     <div class="tabs-header">
       <button class="tab-btn active" onclick="switchTab('tab-comparison')">Comparison Table</button>
-      <button class="tab-btn" onclick="switchTab('tab-matrix')">Combinations Matrix (64 Phantoms)</button>
+      <button class="tab-btn" onclick="switchTab('tab-matrix')">Combinations Matrix (512 Phantoms)</button>
       <button class="tab-btn" onclick="switchTab('tab-code')">Generated C Header</button>
     </div>
 
@@ -679,28 +678,87 @@
               <td colspan="4" style="background:#0b0c10; height:10px; padding:0;"></td>
             </tr>
             <tr>
+              <td><strong>Heads</strong></td>
+              <td>0</td>
+              <td><span class="highlight-classic">Skull</span> — Round dome with hollow sockets.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>1</td>
+              <td><span class="highlight-classic">Cyclops</span> — Single oversized eye, cyber-gaze.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>2</td>
+              <td><span class="highlight-classic">Static</span> — Glitched retro CRT TV noise.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>3</td>
+              <td><span class="highlight-classic">Crown</span> — Spiked horns, regal but sharp.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>4</td>
+              <td><span class="highlight-cute">Foxy</span> — Pointed fox ears, big vertical eyes.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>5</td>
+              <td><span class="highlight-cute">Axo</span> — Axolotl gills, cute blush & smile.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>6</td>
+              <td><span class="highlight-cute">Ghosty</span> — Wizard cowl/hood, mischievous eyes.</td>
+            </tr>
+            <tr>
+              <td><strong>Heads</strong></td>
+              <td>7</td>
+              <td><span class="highlight-cute">Sprout</span> — Leafy sprout budding from bulb head.</td>
+            </tr>
+            <tr>
+              <td colspan="4" style="background:#0b0c10; height:10px; padding:0;"></td>
+            </tr>
+            <tr>
               <td><strong>Bodies</strong></td>
               <td>0</td>
-              <td><span class="highlight-classic">Slime</span> — Rounded formless glob.</td>
-              <td><span class="highlight-cute">Chubby</span> — Fat round belly with tiny paws/hands.</td>
+              <td><span class="highlight-classic">Slime</span> — Rounded formless amorphous glob.</td>
             </tr>
             <tr>
               <td><strong>Bodies</strong></td>
               <td>1</td>
-              <td><span class="highlight-classic">Mech</span> — Boxy frame with empty panels.</td>
-              <td><span class="highlight-cute">Winged</span> — Slender body with small flared wings.</td>
+              <td><span class="highlight-classic">Mech</span> — Boxy mechanical chassis with panels.</td>
             </tr>
             <tr>
               <td><strong>Bodies</strong></td>
               <td>2</td>
-              <td><span class="highlight-classic">Beast</span> — Square torso with thick shoulders.</td>
-              <td><span class="highlight-cute">Fluffy</span> — Cloud mane/collar, fluffy ruff.</td>
+              <td><span class="highlight-classic">Beast</span> — Broad organic torso, thick shoulders.</td>
             </tr>
             <tr>
               <td><strong>Bodies</strong></td>
               <td>3</td>
-              <td><span class="highlight-classic">Crystal</span> — Geometric diamond angles.</td>
-              <td><span class="highlight-cute">Shell</span> — Segmented turtle carapace shell pattern.</td>
+              <td><span class="highlight-classic">Crystal</span> — Geometric diamond facets, angular.</td>
+            </tr>
+            <tr>
+              <td><strong>Bodies</strong></td>
+              <td>4</td>
+              <td><span class="highlight-cute">Chubby</span> — Fat round belly with tiny paws.</td>
+            </tr>
+            <tr>
+              <td><strong>Bodies</strong></td>
+              <td>5</td>
+              <td><span class="highlight-cute">Winged</span> — Slender body with small flared wings.</td>
+            </tr>
+            <tr>
+              <td><strong>Bodies</strong></td>
+              <td>6</td>
+              <td><span class="highlight-cute">Fluffy</span> — Cloud mane/collar, fluffy ruff.</td>
+            </tr>
+            <tr>
+              <td><strong>Bodies</strong></td>
+              <td>7</td>
+              <td><span class="highlight-cute">Shell</span> — Segmented turtle carapace pattern.</td>
             </tr>
             <tr>
               <td colspan="4" style="background:#0b0c10; height:10px; padding:0;"></td>
@@ -708,25 +766,41 @@
             <tr>
               <td><strong>Feet</strong></td>
               <td>0</td>
-              <td><span class="highlight-classic">Claws</span> — Sharp claws extending outward.</td>
-              <td><span class="highlight-cute">Stubby</span> — Rounded chubby flat pads.</td>
+              <td><span class="highlight-classic">Claws</span> — Sharp pointed appendages outward.</td>
             </tr>
             <tr>
               <td><strong>Feet</strong></td>
               <td>1</td>
-              <td><span class="highlight-classic">Hover</span> — Levitating bar with spark streaks.</td>
-              <td><span class="highlight-cute">Swirl</span> — Cute ghost tail swirl curved to side.</td>
+              <td><span class="highlight-classic">Hover</span> — Floating platform with energy streaks.</td>
             </tr>
             <tr>
               <td><strong>Feet</strong></td>
               <td>2</td>
-              <td><span class="highlight-classic">Tentacles</span> — Undulating ocean tendrils.</td>
-              <td><span class="highlight-cute">Fin</span> — Mermaid tail with double flukes.</td>
+              <td><span class="highlight-classic">Tentacles</span> — Wavy undulating ocean tendrils.</td>
             </tr>
             <tr>
               <td><strong>Feet</strong></td>
               <td>3</td>
-              <td><span class="highlight-classic">Legs</span> — Blocky bipedal robot legs.</td>
+              <td><span class="highlight-classic">Legs</span> — Sturdy bipedal robot-style legs.</td>
+            </tr>
+            <tr>
+              <td><strong>Feet</strong></td>
+              <td>4</td>
+              <td><span class="highlight-cute">Stubby</span> — Rounded chubby flat paw pads.</td>
+            </tr>
+            <tr>
+              <td><strong>Feet</strong></td>
+              <td>5</td>
+              <td><span class="highlight-cute">Swirl</span> — Cute ghost tail curved to the side.</td>
+            </tr>
+            <tr>
+              <td><strong>Feet</strong></td>
+              <td>6</td>
+              <td><span class="highlight-cute">Fin</span> — Mermaid tail with double flukes.</td>
+            </tr>
+            <tr>
+              <td><strong>Feet</strong></td>
+              <td>7</td>
               <td><span class="highlight-cute">Rollers</span> — Circular toy-like wheel rollers.</td>
             </tr>
           </tbody>
@@ -737,9 +811,10 @@
     <!-- TAB 2: Combination Matrix -->
     <div class="tab-content" id="tab-matrix">
       <div class="card">
-        <h3 style="color:#fff; margin-bottom: 5px;">Procedural Combination Matrix (64 Creatures)</h3>
+        <h3 style="color:#fff; margin-bottom: 5px;">Full Combination Matrix — 512 Creatures (8×8×8)</h3>
         <p style="color:#8892b0; font-size:0.9rem; margin-bottom:20px;">
-          These are the 64 unique outcomes generated by combining parts. Click on any box to load it into the editor above.
+          All 512 unique combinations from 8 heads × 8 bodies × 8 feet.
+          Click on any box to load it into the editor above.
         </p>
         <div class="matrix-grid" id="matrix-grid">
           <!-- Populated dynamically -->
@@ -764,7 +839,13 @@
   // SPRITE DATA SETS
   // ============================================================
 
-  const CLASSIC_HEADS = [
+  // ============================================================
+  // COMBINED SPRITE DATA — 8 heads, 8 bodies, 8 feet
+  // Indices 0-3: Classic set (Halloween/Sci-Fi)
+  // Indices 4-7: Cute set (Pokémon-like)
+  // ============================================================
+
+  const COMBINED_HEADS = [
     // 0: Skull
     [
       "................",
@@ -800,10 +881,46 @@
       "...#..#..#..#...",
       "...#..####..#...",
       "...##########..."
-    ]
+    ],
+    // 4: Foxy
+    [
+      ".##.........##..",
+      ".###.......###..",
+      ".####.....####..",
+      "#...##...##...#.",
+      "#..###...###..#.",
+      ".#...######...#.",
+    ],
+    // 5: Axo
+    [
+      "...##.....##....",
+      "..####...####...",
+      ".#############..",
+      "#..##.....##...#",
+      "#..##..#..##...#",
+      ".#############..",
+    ],
+    // 6: Ghosty
+    [
+      ".......##.......",
+      "......####......",
+      ".....######.....",
+      "....#.#..#.#....",
+      "....#.####.#....",
+      "....########....",
+    ],
+    // 7: Sprout
+    [
+      "....#......#....",
+      ".....#....#.....",
+      "......####......",
+      "..############..",
+      "..#..##..##..#..",
+      "..############..",
+    ],
   ];
 
-  const CLASSIC_BODIES = [
+  const COMBINED_BODIES = [
     // 0: Slime
     [
       "................",
@@ -843,10 +960,50 @@
       ".....##..##.....",
       "......####......",
       ".....#....#..."
+    ],
+    // 4: Chubby
+    [
+      "................",
+      "....########....",
+      "..############..",
+      ".#.##########.#.",
+      "..############..",
+      "....########....",
+      "...##......##..."
+    ],
+    // 5: Winged
+    [
+      "................",
+      ".##..######..##.",
+      ".###.######.###.",
+      "..##.######.##..",
+      "....######......",
+      ".....######.....",
+      "....#......#...."
+    ],
+    // 6: Fluffy
+    [
+      "................",
+      "...##########...",
+      ".##############.",
+      ".##############.",
+      "...##########...",
+      "....########....",
+      "...##......##..."
+    ],
+    // 7: Shell
+    [
+      "................",
+      "....########....",
+      "..###.##.##.###.",
+      "..#.#.##.##.#.#.",
+      "..###.##.##.###.",
+      "....########....",
+      "...##......##..."
     ]
   ];
 
-  const CLASSIC_FEET = [
+  const COMBINED_FEET = [
     // 0: Claws
     [
       "................",
@@ -886,93 +1043,8 @@
       "...##......###..",
       "...###....###..",
       "................"
-    ]
-  ];
-
-  const CUTE_HEADS = [
-    // 0: Foxy (pointed ears, vertical 2x2 eyes)
-    [
-      ".##.........##.",
-      ".###.......###.",
-      ".####.....####.",
-      "#...##...##...#",
-      "#..###...###..#",
-      ".#...######...#."
     ],
-    // 1: Axo (Axolotl gills, cute eyes, smiley mouth)
-    [
-      "...##.....##...",
-      "..####...####..",
-      ".#############.",
-      "#..##.....##..#",
-      "#..##..#..##..#",
-      ".#############."
-    ],
-    // 2: Ghosty (Wizard cowl/hood, cute eyes)
-    [
-      ".......##.......",
-      "......####......",
-      ".....######.....",
-      "....#.#..#.#....",
-      "....#.####.#....",
-      "....########...."
-    ],
-    // 3: Sprout (Leafy sprout budding from bulb head)
-    [
-      "....#......#....",
-      ".....#....#.....",
-      "......####......",
-      "..##########..",
-      ".#..##..##..#.",
-      "..##########.."
-    ]
-  ];
-
-  const CUTE_BODIES = [
-    // 0: Chubby (paws on sides, round belly)
-    [
-      "................",
-      "....########....",
-      "..############..",
-      ".#.##########.#.",
-      "..############..",
-      "....########....",
-      "...##......##..."
-    ],
-    // 1: Winged (slender body with flared wings)
-    [
-      "................",
-      ".##..######..##.",
-      ".###.######.###.",
-      "..##.######.##..",
-      "....######......",
-      ".....######.....",
-      "....#......#...."
-    ],
-    // 2: Fluffy (cloud mane/ruff)
-    [
-      "................",
-      "...##########...",
-      ".##############.",
-      ".##############.",
-      "...##########...",
-      "....########....",
-      "...##......##..."
-    ],
-    // 3: Shell (segmented turtle shell pattern)
-    [
-      "................",
-      "....########....",
-      "..###.##.##.###..",
-      "..#.#.##.##.#.#..",
-      "..###.##.##.###..",
-      "....########....",
-      "...##......##..."
-    ]
-  ];
-
-  const CUTE_FEET = [
-    // 0: Stubby (chubby paws)
+    // 4: Stubby
     [
       "................",
       "...##......##...",
@@ -982,7 +1054,7 @@
       "..##........##..",
       "................"
     ],
-    // 1: Swirl (asymmetric ghost tail swirl)
+    // 5: Swirl
     [
       "................",
       "....########....",
@@ -992,7 +1064,7 @@
       "........###.....",
       ".........##....."
     ],
-    // 2: Fin (mermaid fins)
+    // 6: Fin
     [
       "................",
       "...##......##...",
@@ -1002,7 +1074,7 @@
       "....########....",
       "...##......##..."
     ],
-    // 3: Rollers (toy-like wheel rollers)
+    // 7: Rollers
     [
       "................",
       "...##......##...",
@@ -1014,20 +1086,15 @@
     ]
   ];
 
-  const CLASSIC_NAMES = {
-    heads: ["Skull", "Cyclops", "Static", "Crown"],
-    bodies: ["Slime", "Mech", "Beast", "Crystal"],
-    feet: ["Claws", "Hover", "Tentacles", "Legs"]
+  const COMBINED_NAMES = {
+    heads: ["Skull", "Cyclops", "Static", "Crown", "Foxy", "Axo", "Ghosty", "Sprout"],
+    bodies: ["Slime", "Mech", "Beast", "Crystal", "Chubby", "Winged", "Fluffy", "Shell"],
+    feet: ["Claws", "Hover", "Tentacles", "Legs", "Stubby", "Swirl", "Fin", "Rollers"]
   };
 
-  const CUTE_NAMES = {
-    heads: ["Foxy", "Axo", "Ghosty", "Sprout"],
-    bodies: ["Chubby", "Winged", "Fluffy", "Shell"],
-    feet: ["Stubby", "Swirl", "Fin", "Rollers"]
-  };
+  const PART_COUNT = 8;
 
   // State
-  let currentSet = "classic"; // 'classic' or 'cute'
   let selectedHead = 0;
   let selectedBody = 0;
   let selectedFeet = 0;
@@ -1043,13 +1110,9 @@
   const formulaDisplay = document.getElementById("formula-display");
   const codeOutput = document.getElementById("code-output");
 
-  // Get active arrays
+  // Get active arrays (always uses combined set)
   function getParts() {
-    if (currentSet === "classic") {
-      return { heads: CLASSIC_HEADS, bodies: CLASSIC_BODIES, feet: CLASSIC_FEET, names: CLASSIC_NAMES };
-    } else {
-      return { heads: CUTE_HEADS, bodies: CUTE_BODIES, feet: CUTE_FEET, names: CUTE_NAMES };
-    }
+    return { heads: COMBINED_HEADS, bodies: COMBINED_BODIES, feet: COMBINED_FEET, names: COMBINED_NAMES };
   }
 
   // Draw 16x16 sprite composite
@@ -1144,9 +1207,8 @@
     // Draw Player sprite on left
     drawSpriteOnLcd(spriteGrid, 12, 20, fgColor);
 
-    // Draw a mock corrupted enemy sprite on right
-    // Let's use mirror-ish or static classic sprite
-    const enemyParts = (currentSet === 'classic') ? getParts() : { heads: CLASSIC_HEADS, bodies: CLASSIC_BODIES, feet: CLASSIC_FEET };
+    // Draw a mock corrupted enemy sprite on right using combined set
+    const enemyParts = getParts();
     const enemyGrid = compositeSprite(3, 2, 0, enemyParts); // Crown + Beast + Claws
     drawSpriteOnLcd(enemyGrid, 100, 20, fgColor);
 
@@ -1225,34 +1287,7 @@
     return btn;
   }
 
-  // Sprite set toggle
-  function setSpriteSet(set) {
-    currentSet = set;
-    
-    document.getElementById("btn-toggle-classic").className = `toggle-btn ${set === "classic" ? "active classic" : ""}`;
-    document.getElementById("btn-toggle-cute").className = `toggle-btn ${set === "cute" ? "active cute" : ""}`;
-
-    const cardHeader = document.getElementById("editor-set-name");
-    const cardBadge = document.getElementById("editor-set-badge");
-    const mainCard = document.getElementById("main-editor-card");
-
-    if (set === "classic") {
-      cardHeader.innerText = "Classic Sprite Set";
-      cardBadge.innerText = "Default";
-      cardBadge.className = "badge";
-      mainCard.classList.remove("proposed");
-    } else {
-      cardHeader.innerText = "Proposed Cute Set";
-      cardBadge.innerText = "Cute/Pokemon";
-      cardBadge.className = "badge proposed";
-      mainCard.classList.add("proposed");
-    }
-
-    populateControls();
-    renderEditor();
-    generateMatrix();
-    updateCodeText();
-  }
+  // No toggle needed — combined 8-part set is always active
 
   // Switch tabs
   function switchTab(tabId) {
@@ -1271,16 +1306,16 @@
     }
   }
 
-  // Generate Matrix of all 64 creatures
+  // Generate Matrix — showing classic subset (0-3) for preview (64 combos)
   function generateMatrix() {
     const matrixGrid = document.getElementById("matrix-grid");
     matrixGrid.innerHTML = "";
 
     const partsList = getParts();
 
-    for (let h = 0; h < 4; h++) {
-      for (let b = 0; b < 4; b++) {
-        for (let f = 0; f < 4; f++) {
+    for (let h = 0; h < PART_COUNT; h++) {
+      for (let b = 0; b < PART_COUNT; b++) {
+        for (let f = 0; f < PART_COUNT; f++) {
           const item = document.createElement("div");
           item.className = `matrix-item ${h===selectedHead && b===selectedBody && f===selectedFeet ? 'active-combo' : ''}`;
           item.id = `combo-${h}-${b}-${f}`;
@@ -1294,7 +1329,7 @@
           const grid = compositeSprite(h, b, f, partsList);
           ctx.fillStyle = "#000000";
           ctx.fillRect(0, 0, 16, 16);
-          ctx.fillStyle = (currentSet === 'classic') ? "#ff8200" : "#45f3ff";
+          ctx.fillStyle = "#45f3ff";
           for (let r = 0; r < 16; r++) {
             for (let c = 0; c < 16; c++) {
               if (grid[r][c]) ctx.fillRect(c, r, 1, 1);
@@ -1334,13 +1369,15 @@
   }
 
   // Convert array of string rows to C hex format array
-  function formatPartToCHex(partName, partData) {
+  function formatPartToCHex(partName, partData, varName) {
     let result = `/*  ---- ${partName} ----\n`;
     for(let r = 0; r < partData.length; r++) {
       result += ` *  ${partData[r]}\n`;
     }
     result += ` */\n`;
-    result += `static const uint8_t ${partName.toLowerCase().replace(/\s+/g, '_').replace(/[:()]/g, '')}[PHANTOM_SPRITE_BYTES] = {\n`;
+    // If varName is provided, use it directly; otherwise derive from partName
+    const name = varName || partName.toLowerCase().replace(/\s+/g, '_').replace(/[:()]/g, '');
+    result += `static const uint8_t ${name}[PHANTOM_SPRITE_BYTES] = {\n`;
     
     // We have 16 rows.
     // Heads have active rows 0-5.
@@ -1380,12 +1417,20 @@
     return result;
   }
 
+  // C variable names for each part (matching phantom_sprites.h)
+  const HEAD_VARS = ["phantom_head_skull", "phantom_head_cyclops", "phantom_head_static", "phantom_head_crown",
+                     "phantom_head_foxy", "phantom_head_axo", "phantom_head_ghosty", "phantom_head_sprout"];
+  const BODY_VARS = ["phantom_body_slime", "phantom_body_mech", "phantom_body_beast", "phantom_body_crystal",
+                     "phantom_body_chubby", "phantom_body_winged", "phantom_body_fluffy", "phantom_body_shell"];
+  const FEET_VARS = ["phantom_feet_claws", "phantom_feet_hover", "phantom_feet_tentacles", "phantom_feet_legs",
+                     "phantom_feet_stubby", "phantom_feet_swirl", "phantom_feet_fin", "phantom_feet_rollers"];
+
   // Update C Code tab content
   function updateCodeText() {
     const partsList = getParts();
     let code = `/**\n`;
     code += ` * phantom_sprites.h — Eye of the Phantom\n`;
-    code += ` * Generated dynamically via Phantom Sprite Lab (${currentSet === 'classic' ? 'Classic' : 'Cute'} Set)\n`;
+    code += ` * Combined 8-part set\n`;
     code += ` */\n\n`;
     code += `#ifndef PHANTOM_SPRITES_H\n`;
     code += `#define PHANTOM_SPRITES_H\n\n`;
@@ -1394,29 +1439,29 @@
     code += `#define PHANTOM_SPRITE_W      16\n`;
     code += `#define PHANTOM_SPRITE_H      16\n`;
     code += `#define PHANTOM_SPRITE_BYTES  32\n\n`;
-    code += `#define PHANTOM_HEAD_COUNT    4\n`;
-    code += `#define PHANTOM_BODY_COUNT    4\n`;
-    code += `#define PHANTOM_FEET_COUNT    4\n\n`;
+    code += `#define PHANTOM_HEAD_COUNT    ` + PART_COUNT + `\n`;
+    code += `#define PHANTOM_BODY_COUNT    ` + PART_COUNT + `\n`;
+    code += `#define PHANTOM_FEET_COUNT    ` + PART_COUNT + `\n\n`;
 
     code += `/* ================================================================\n`;
     code += ` * HEAD PARTS (active rows 0–5)\n`;
     code += ` * ================================================================ */\n\n`;
     partsList.heads.forEach((data, i) => {
-      code += formatPartToCHex(`Head ${i}: ${partsList.names.heads[i]}`, data) + "\n";
+      code += formatPartToCHex(`Head ${i}: ${partsList.names.heads[i]}`, data, HEAD_VARS[i]) + "\n";
     });
 
     code += `/* ================================================================\n`;
     code += ` * BODY PARTS (active rows 4–10)\n`;
     code += ` * ================================================================ */\n\n`;
     partsList.bodies.forEach((data, i) => {
-      code += formatPartToCHex(`Body ${i}: ${partsList.names.bodies[i]}`, data) + "\n";
+      code += formatPartToCHex(`Body ${i}: ${partsList.names.bodies[i]}`, data, BODY_VARS[i]) + "\n";
     });
 
     code += `/* ================================================================\n`;
     code += ` * FEET PARTS (active rows 9–15)\n`;
     code += ` * ================================================================ */\n\n`;
     partsList.feet.forEach((data, i) => {
-      code += formatPartToCHex(`Feet ${i}: ${partsList.names.feet[i]}`, data) + "\n";
+      code += formatPartToCHex(`Feet ${i}: ${partsList.names.feet[i]}`, data, FEET_VARS[i]) + "\n";
     });
 
     code += `/* ================================================================\n`;
@@ -1424,38 +1469,38 @@
     code += ` * ================================================================ */\n\n`;
 
     code += `static const uint8_t* const phantom_heads[PHANTOM_HEAD_COUNT] = {\n`;
-    for(let i=0; i<4; i++) {
-      code += `    phantom_head_${partsList.names.heads[i].toLowerCase()},\n`;
+    for(let i = 0; i < PART_COUNT; i++) {
+      code += `    ` + HEAD_VARS[i] + `,     /* ` + i + ` */\n`;
     }
     code += `};\n\n`;
 
     code += `static const uint8_t* const phantom_bodies[PHANTOM_BODY_COUNT] = {\n`;
-    for(let i=0; i<4; i++) {
-      code += `    phantom_body_${partsList.names.bodies[i].toLowerCase()},\n`;
+    for(let i = 0; i < PART_COUNT; i++) {
+      code += `    ` + BODY_VARS[i] + `,     /* ` + i + ` */\n`;
     }
     code += `};\n\n`;
 
     code += `static const uint8_t* const phantom_feet_parts[PHANTOM_FEET_COUNT] = {\n`;
-    for(let i=0; i<4; i++) {
-      code += `    phantom_feet_${partsList.names.feet[i].toLowerCase()},\n`;
+    for(let i = 0; i < PART_COUNT; i++) {
+      code += `    ` + FEET_VARS[i] + `,     /* ` + i + ` */\n`;
     }
     code += `};\n\n`;
 
     code += `static const char* const phantom_head_names[PHANTOM_HEAD_COUNT] = {\n`;
-    for(let i=0; i<4; i++) {
-      code += `    "${partsList.names.heads[i]}",\n`;
+    for(let i = 0; i < PART_COUNT; i++) {
+      code += `    "` + partsList.names.heads[i] + `",\n`;
     }
     code += `};\n\n`;
 
     code += `static const char* const phantom_body_names[PHANTOM_BODY_COUNT] = {\n`;
-    for(let i=0; i<4; i++) {
-      code += `    "${partsList.names.bodies[i]}",\n`;
+    for(let i = 0; i < PART_COUNT; i++) {
+      code += `    "` + partsList.names.bodies[i] + `",\n`;
     }
     code += `};\n\n`;
 
     code += `static const char* const phantom_feet_names[PHANTOM_FEET_COUNT] = {\n`;
-    for(let i=0; i<4; i++) {
-      code += `    "${partsList.names.feet[i]}",\n`;
+    for(let i = 0; i < PART_COUNT; i++) {
+      code += `    "` + partsList.names.feet[i] + `",\n`;
     }
     code += `};\n\n`;
 
@@ -1488,10 +1533,9 @@
     code += `    uint8_t* body_idx,\n`;
     code += `    uint8_t* feet_idx)\n`;
     code += `{\n`;
-    code += `    *head_idx = address & 0x03;\n`;
-    code += `    *body_idx = (address >> 2) & 0x03;\n`;
-    code += `    *feet_idx = (address >> 4) & 0x03;\n`;
-    code += `    // Ensure safety bounds mapping if count increases\n`;
+    code += `    *head_idx = address & 0x07;          /* bits 0-2  (0-7) */\n`;
+    code += `    *body_idx = (address >> 3) & 0x07;   /* bits 3-5  (0-7) */\n`;
+    code += `    *feet_idx = (address >> 6) & 0x07;   /* bits 6-8  (0-7) */\n`;
     code += `}\n\n`;
 
     code += `#endif /* PHANTOM_SPRITES_H */\n`;
