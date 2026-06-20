@@ -1,0 +1,17 @@
+# Flipper Zero Build outputs
+dist/
+build/
+*.fap
+*.elf
+*.bin
+
+# OS-specific files
+.DS_Store
+.directory
+Thubs.db
+
+# IDE and development configurations
+.vscode/compile_commands.json
+.vscode/ipch/
+.vscode/.browse.VC.db
+.vscode/config_cache_*.json
