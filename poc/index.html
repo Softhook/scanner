@@ -645,10 +645,10 @@ function generatePhantom(protocol, address, command, isRF = false) {
 
 function getEffectiveStats(phantom) {
   return {
-    hp:  phantom.stats.hp + phantom.upgrades.hp * 3,
-    atk: phantom.stats.atk + phantom.upgrades.atk * 2,
-    def: phantom.stats.def + phantom.upgrades.def * 2,
-    spd: phantom.stats.spd + phantom.upgrades.spd * 1,
+    hp:  phantom.stats.hp + phantom.upgrades.hp,
+    atk: phantom.stats.atk + phantom.upgrades.atk,
+    def: phantom.stats.def + phantom.upgrades.def,
+    spd: phantom.stats.spd + phantom.upgrades.spd,
   };
 }
 
@@ -1225,7 +1225,7 @@ function executeTurn(actionIdx) {
   if (c.enemy.hp <= 0) {
     c.enemy.hp = 0;
     c.state = 'WIN';
-    const shards = game.currentFloor + 1;
+    const shards = (game.currentFloor + 1) * 3;
     game.dataShards += shards;
     game.currentFloor++;
     game.hasSavedCombat = false;
@@ -1328,7 +1328,7 @@ function enemyTurn() {
   if (c.enemy.hp <= 0) {
     c.enemy.hp = 0;
     c.state = 'WIN';
-    const shards = game.currentFloor + 1;
+    const shards = (game.currentFloor + 1) * 3;
     game.dataShards += shards;
     game.currentFloor++;
     game.hasSavedCombat = false;
@@ -1399,16 +1399,31 @@ function renderTitle() {
   flushBuffer();
 }
 
+function getFloorName(floor) {
+  const NAMES = [
+    "ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", 
+    "SIX", "SEVEN", "EIGHT", "NINE", "TEN",
+    "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN"
+  ];
+  if (floor <= 15) {
+    return "FLOOR " + NAMES[floor];
+  } else {
+    return "FLOOR " + floor;
+  }
+}
+
 function renderMenu() {
   clearBuffer();
   const items = ['SCAN','MY PHANTOM','ASCEND','DESCEND','CAMP'];
   drawText('MENU', 2, 2);
   drawLine(0, 9, 127, 9);
 
-  // Show shards
-  drawText('$' + game.dataShards, 80, 2);
-  // Show floor
-  drawText('F' + game.currentFloor, 108, 2);
+  // Show shards as XP
+  drawText('XP:' + game.dataShards, 42, 2);
+  // Show floor name
+  const flBuf = getFloorName(game.currentFloor);
+  const flW = flBuf.length * 5;
+  drawText(flBuf, 128 - flW - 2, 2);
 
   for (let i = 0; i < items.length; i++) {
     const y = 14 + i * 10;
@@ -1591,15 +1606,10 @@ function renderPhantom() {
   drawText(p.cls, 26, 14);
 
   const es = getEffectiveStats(p);
-  drawText('HP  ' + es.hp, 26, 24);
-  drawText('ATK ' + es.atk, 26, 32);
-  drawText('DEF ' + es.def, 76, 24);
-  drawText('SPD ' + es.spd, 76, 32);
-
-  // Upgrades
-  if (p.upgrades.hp || p.upgrades.atk || p.upgrades.def || p.upgrades.spd) {
-    drawText('+' + p.upgrades.hp + ' +' + p.upgrades.atk + ' +' + p.upgrades.def + ' +' + p.upgrades.spd, 26, 42);
-  }
+  drawText('HP  ' + es.hp + (p.upgrades.hp > 0 ? ' (+' + p.upgrades.hp + ')' : ''), 26, 23);
+  drawText('ATK ' + es.atk + (p.upgrades.atk > 0 ? ' (+' + p.upgrades.atk + ')' : ''), 26, 31);
+  drawText('DEF ' + es.def + (p.upgrades.def > 0 ? ' (+' + p.upgrades.def + ')' : ''), 26, 39);
+  drawText('SPD ' + es.spd + (p.upgrades.spd > 0 ? ' (+' + p.upgrades.spd + ')' : ''), 26, 47);
 
   const originTag = PROTOCOLS_IR.includes(p.protocol) ? 'IR:' : 'RF:';
   drawText(originTag + p.protocol, 2, 56);
@@ -1718,9 +1728,9 @@ function renderVictory() {
   }
 
   const shards = game.combat ? game.combat.shardReward : 0;
-  drawTextCentered('FLOOR ' + (game.currentFloor - 1) + ' CLEARED!', 36);
-  drawTextCentered('+' + shards + ' DATA SHARDS', 44);
-  drawTextCentered('TOTAL: ' + game.dataShards, 52);
+  drawTextCentered(getFloorName(game.currentFloor - 1) + ' CLEARED!', 36);
+  drawTextCentered('+' + shards + ' XP', 44);
+  drawTextCentered('TOTAL XP: ' + game.dataShards, 52);
 
   if (Math.floor(t / 20) % 2 === 0)
     drawTextCentered('PRESS OK', 58);
@@ -1756,7 +1766,7 @@ function renderCamp() {
   clearBuffer();
   const items = ['UPGRADE STATS','COLLECTION','COMBAT INFO','BACK'];
   drawText('CAMP', 2, 2);
-  drawText('$' + game.dataShards, 80, 2);
+  drawText('XP:' + game.dataShards, 80, 2);
   drawLine(0, 9, 127, 9);
 
   for (let i = 0; i < items.length; i++) {
@@ -1839,7 +1849,7 @@ function renderUpgrade() {
   if (!p) { flushBuffer(); return; }
 
   drawText('UPGRADE', 2, 2);
-  drawText('$' + game.dataShards, 80, 2);
+  drawText('XP:' + game.dataShards, 80, 2);
   drawLine(0, 9, 127, 9);
 
   const stats = ['HP','ATK','DEF','SPD'];
@@ -1849,7 +1859,7 @@ function renderUpgrade() {
   for (let i = 0; i < 4; i++) {
     const y = 14 + i * 10;
     const cost = (p.upgrades[stats[i].toLowerCase()] + 1) * 3;
-    const label = stats[i] + ' ' + vals[i] + ' +' + p.upgrades[stats[i].toLowerCase()] + ' ($' + cost + ')';
+    const label = stats[i] + ' ' + vals[i] + ' +' + p.upgrades[stats[i].toLowerCase()] + ' (' + cost + ' XP)';
     if (i === game.cursor) {
       drawRect(0, y - 1, 128, 7, true);
       drawText(label, 4, y, true);

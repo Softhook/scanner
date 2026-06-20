@@ -270,10 +270,10 @@ static void phantom_generate(Phantom* p, SignalProtocol proto,
 
 static void phantom_get_effective(const Phantom* p, int16_t* hp, int16_t* atk,
                                    int16_t* def, int16_t* spd) {
-    *hp  = p->stats.hp  + p->upgrades.hp  * 3;
-    *atk = p->stats.atk + p->upgrades.atk * 2;
-    *def = p->stats.def + p->upgrades.def * 2;
-    *spd = p->stats.spd + p->upgrades.spd * 1;
+    *hp  = p->stats.hp  + p->upgrades.hp;
+    *atk = p->stats.atk + p->upgrades.atk;
+    *def = p->stats.def + p->upgrades.def;
+    *spd = p->stats.spd + p->upgrades.spd;
 }
 
 static void phantom_generate_enemy(Phantom* p, uint16_t floor) {
@@ -960,15 +960,31 @@ static void render_title(Canvas* c, EyePhantomApp* app) {
         draw_str_centered(c, "PRESS OK", 56);
 }
 
+static void get_floor_name(uint16_t floor, char* buf, size_t buf_len) {
+    static const char* NAMES[] = {
+        "ZERO", "ONE", "TWO", "THREE", "FOUR", "FIVE", 
+        "SIX", "SEVEN", "EIGHT", "NINE", "TEN",
+        "ELEVEN", "TWELVE", "THIRTEEN", "FOURTEEN", "FIFTEEN"
+    };
+    if(floor <= 15) {
+        snprintf(buf, buf_len, "FLOOR %s", NAMES[floor]);
+    } else {
+        snprintf(buf, buf_len, "FLOOR %u", floor);
+    }
+}
+
 static void render_menu(Canvas* c, EyePhantomApp* app) {
     canvas_clear(c);
     draw_str(c, "MENU", 2, 2);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "$%lu", app->data_shards);
-    draw_str(c, buf, 80, 2);
-    snprintf(buf, sizeof(buf), "F%u", app->current_floor);
-    draw_str(c, buf, 108, 2);
+    snprintf(buf, sizeof(buf), "XP:%lu", app->data_shards);
+    draw_str(c, buf, 42, 2);
+
+    char fl_buf[24];
+    get_floor_name(app->current_floor, fl_buf, sizeof(fl_buf));
+    int fl_w = strlen(fl_buf) * CHAR_W;
+    draw_str(c, fl_buf, SCREEN_W - fl_w - 2, 2);
 
     canvas_draw_line(c, 0, 9, 127, 9);
 
@@ -1090,21 +1106,33 @@ static void render_phantom(Canvas* c, EyePhantomApp* app) {
     phantom_get_effective(p, &hp, &atk, &def, &spd);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "HP  %d", hp);
-    draw_str(c, buf, 26, 24);
-    snprintf(buf, sizeof(buf), "ATK %d", atk);
-    draw_str(c, buf, 26, 32);
-    snprintf(buf, sizeof(buf), "DEF %d", def);
-    draw_str(c, buf, 76, 24);
-    snprintf(buf, sizeof(buf), "SPD %d", spd);
-    draw_str(c, buf, 76, 32);
-
-    if(p->upgrades.hp || p->upgrades.atk || p->upgrades.def || p->upgrades.spd) {
-        char upbuf[32];
-        snprintf(upbuf, sizeof(upbuf), "+%d +%d +%d +%d",
-                 p->upgrades.hp, p->upgrades.atk, p->upgrades.def, p->upgrades.spd);
-        draw_str(c, upbuf, 26, 42);
+    if(p->upgrades.hp > 0) {
+        snprintf(buf, sizeof(buf), "HP  %d (+%d)", hp, p->upgrades.hp);
+    } else {
+        snprintf(buf, sizeof(buf), "HP  %d", hp);
     }
+    draw_str(c, buf, 26, 23);
+
+    if(p->upgrades.atk > 0) {
+        snprintf(buf, sizeof(buf), "ATK %d (+%d)", atk, p->upgrades.atk);
+    } else {
+        snprintf(buf, sizeof(buf), "ATK %d", atk);
+    }
+    draw_str(c, buf, 26, 31);
+
+    if(p->upgrades.def > 0) {
+        snprintf(buf, sizeof(buf), "DEF %d (+%d)", def, p->upgrades.def);
+    } else {
+        snprintf(buf, sizeof(buf), "DEF %d", def);
+    }
+    draw_str(c, buf, 26, 39);
+
+    if(p->upgrades.spd > 0) {
+        snprintf(buf, sizeof(buf), "SPD %d (+%d)", spd, p->upgrades.spd);
+    } else {
+        snprintf(buf, sizeof(buf), "SPD %d", spd);
+    }
+    draw_str(c, buf, 26, 47);
 
     draw_str(c, PROTO_NAMES[p->protocol], 2, 56);
     draw_str(c, "BACK", 100, 56);
@@ -1220,14 +1248,16 @@ static void render_victory(Canvas* c, EyePhantomApp* app) {
         draw_sprite(c, app->active_phantom.sprite, 56, 16 + bounce);
     }
 
-    char buf[32];
-    snprintf(buf, sizeof(buf), "FLOOR %u CLEARED!", app->current_floor - 1);
+    char fl_name[24];
+    get_floor_name(app->current_floor - 1, fl_name, sizeof(fl_name));
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s CLEARED!", fl_name);
     draw_str_centered(c, buf, 36);
 
-    uint32_t shards = app->current_floor; /* floor already incremented */
-    snprintf(buf, sizeof(buf), "+%lu DATA SHARDS", shards);
+    uint32_t shards = app->current_floor * 3; /* floor already incremented */
+    snprintf(buf, sizeof(buf), "+%lu XP", shards);
     draw_str_centered(c, buf, 44);
-    snprintf(buf, sizeof(buf), "TOTAL: %lu", app->data_shards);
+    snprintf(buf, sizeof(buf), "TOTAL XP: %lu", app->data_shards);
     draw_str_centered(c, buf, 52);
 
     if((t / 20) % 2 == 0)
@@ -1263,7 +1293,7 @@ static void render_camp(Canvas* c, EyePhantomApp* app) {
 
     draw_str(c, "CAMP", 2, 2);
     char buf[32];
-    snprintf(buf, sizeof(buf), "$%lu", app->data_shards);
+    snprintf(buf, sizeof(buf), "XP:%lu", app->data_shards);
     draw_str(c, buf, 80, 2);
     canvas_draw_line(c, 0, 9, 127, 9);
 
@@ -1287,7 +1317,7 @@ static void render_upgrade(Canvas* c, EyePhantomApp* app) {
 
     draw_str(c, "UPGRADE", 2, 2);
     char buf[32];
-    snprintf(buf, sizeof(buf), "$%lu", app->data_shards);
+    snprintf(buf, sizeof(buf), "XP:%lu", app->data_shards);
     draw_str(c, buf, 80, 2);
     canvas_draw_line(c, 0, 9, 127, 9);
 
@@ -1301,7 +1331,7 @@ static void render_upgrade(Canvas* c, EyePhantomApp* app) {
     for(int i = 0; i < 4; i++) {
         int y = 14 + i * 10;
         uint32_t cost = (*ups[i] + 1) * 3;
-        snprintf(buf, sizeof(buf), "%s %d +%d ($%lu)",
+        snprintf(buf, sizeof(buf), "%s %d +%d (%lu XP)",
                  stat_names[i], vals[i], *ups[i], cost);
         if(i == app->cursor) {
             canvas_draw_box(c, 0, y - 1, 128, 7);
@@ -1761,7 +1791,7 @@ static void app_tick(void* context) {
             app->combat.delay_timer--;
             if(app->combat.delay_timer == 0) {
                 if(app->combat.next_state == COMBAT_WIN) {
-                    uint32_t shards = app->current_floor + 1;
+                    uint32_t shards = (app->current_floor + 1) * 3;
                     app->data_shards += shards;
                     app->current_floor++;
                     app->has_saved_combat = false;
