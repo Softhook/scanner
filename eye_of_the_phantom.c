@@ -24,6 +24,7 @@
 #include <nfc/nfc_poller.h>
 #include <nfc/protocols/iso14443_3a/iso14443_3a_poller.h>
 #include <math.h>
+#include <furi_hal_speaker.h>
 
 #include "src/phantom_sprites.h"
 
@@ -197,7 +198,15 @@ typedef struct {
     bool        saved_enemy_overloaded;
     uint16_t    saved_combat_floor;
     bool        pending_save;
+    uint8_t     sound_volume;   /* 0-10, default 8 */
 } EyePhantomApp;
+
+/* ================================================================
+ * SOUND — forward declarations (definitions after HAPTICS section)
+ * ================================================================ */
+
+static void sound_beep(float freq, uint32_t dur_ms, uint8_t volume);
+static void sound_play_battle_start(uint8_t volume);
 
 /* ================================================================
  * PROTOCOL / CLASS DATA
@@ -422,6 +431,7 @@ static void combat_start(EyePhantomApp* app) {
         app->has_saved_combat = false;
         combat_set_turn_order(c, app->current_floor,
             "F%u REMATCH-FOE FAST", "F%u - REMATCH!");
+        sound_play_battle_start(app->sound_volume);
         return;
     }
 
@@ -433,6 +443,7 @@ static void combat_start(EyePhantomApp* app) {
     app->has_saved_combat = false;
     combat_set_turn_order(c, app->current_floor,
         "F%u - FOE IS FASTER!", "F%u - FIGHT!");
+    sound_play_battle_start(app->sound_volume);
 }
 
 static int16_t combat_calc_damage(CombatUnit* attacker, CombatUnit* defender,
@@ -589,6 +600,7 @@ static void combat_player_action(EyePhantomApp* app, CombatAction action) {
     /* Overloaded — skip this turn */
     if(c->player.overloaded) {
         combat_handle_overload_skip(&c->player, c->log, COMBAT_LOG_LEN, "");
+        sound_beep(100.00f, 40, app->sound_volume); /* overload skip buzz */
         goto check_deaths;
     }
 
@@ -597,6 +609,7 @@ static void combat_player_action(EyePhantomApp* app, CombatAction action) {
                          ? c->player.heat - GUARD_COOLING : 0;
         c->player.defending = true;
         snprintf(c->log, COMBAT_LOG_LEN, "%s", ACTION_LOG_PLAYER[ACTION_GUARD]);
+        sound_beep(349.23f, 40, app->sound_volume); /* guard — low defensive tone */
         goto check_overload;
     }
 
@@ -604,6 +617,15 @@ static void combat_player_action(EyePhantomApp* app, CombatAction action) {
     bool crit;
     int16_t dmg = combat_apply_attack(&c->player, &c->enemy, action, &crit);
     int16_t foe_ov = 0;
+
+    /* Action sound — played immediately after damage is dealt */
+    if(action == ACTION_STRIKE) {
+        sound_beep(659.25f, 40, app->sound_volume); /* strike — crisp high note */
+    } else if(action == ACTION_SURGE) {
+        sound_beep(880.00f, 40, app->sound_volume); /* surge — sharp high note */
+    } else if(action == ACTION_REVERSE) {
+        sound_beep(220.00f, 40, app->sound_volume); /* reverse — deep low note */
+    }
 
     /* Reverse: check if foe overloaded from heat transfer immediately */
     if(action == ACTION_REVERSE) {
@@ -623,7 +645,10 @@ check_overload:
     /* Player overload from self-heat */
     {
         int16_t ov = combat_check_overload(&c->player);
-        if(ov) snprintf(c->log, COMBAT_LOG_LEN, "OVERLOAD! -%d", ov);
+        if(ov) {
+            snprintf(c->log, COMBAT_LOG_LEN, "OVERLOAD! -%d", ov);
+            sound_beep(100.00f, 40, app->sound_volume); /* overload damage buzz */
+        }
     }
 
 check_deaths:
@@ -662,6 +687,7 @@ static void combat_enemy_action(EyePhantomApp* app) {
     /* Overloaded — skip this turn */
     if(c->enemy.overloaded) {
         combat_handle_overload_skip(&c->enemy, c->log, COMBAT_LOG_LEN, "FOE ");
+        sound_beep(150.00f, 30, app->sound_volume); /* foe overload skip */
         goto check_deaths;
     }
 
@@ -672,12 +698,22 @@ static void combat_enemy_action(EyePhantomApp* app) {
                         ? c->enemy.heat - GUARD_COOLING : 0;
         c->enemy.defending = true;
         snprintf(c->log, COMBAT_LOG_LEN, "%s", ACTION_LOG_ENEMY[ACTION_GUARD]);
+        sound_beep(293.66f, 30, app->sound_volume); /* foe guard — dull thud */
         goto check_overload;
     }
 
     bool crit;
     int16_t dmg = combat_apply_attack(&c->enemy, &c->player, action, &crit);
     int16_t foe_ov = 0;
+
+    /* Enemy action sound — played immediately after damage is dealt */
+    if(action == ACTION_STRIKE) {
+        sound_beep(440.00f, 30, app->sound_volume); /* foe strike */
+    } else if(action == ACTION_SURGE) {
+        sound_beep(554.37f, 30, app->sound_volume); /* foe surge */
+    } else if(action == ACTION_REVERSE) {
+        sound_beep(196.00f, 30, app->sound_volume); /* foe reverse — menacing low */
+    }
 
     /* Reverse: check if player overloaded from heat transfer immediately */
     if(action == ACTION_REVERSE) {
@@ -696,7 +732,10 @@ check_overload:
     /* Enemy overload from self-heat */
     {
         int16_t ov = combat_check_overload(&c->enemy);
-        if(ov) snprintf(c->log, COMBAT_LOG_LEN, "FOE OVERLOAD! -%d", ov);
+        if(ov) {
+            snprintf(c->log, COMBAT_LOG_LEN, "FOE OVERLOAD! -%d", ov);
+            sound_beep(150.00f, 30, app->sound_volume); /* foe overload damage */
+        }
     }
 
 check_deaths:
@@ -709,7 +748,7 @@ check_deaths:
  * ================================================================ */
 
 #define SAVE_MAGIC  0x45505450  /* "EPTP" */
-#define SAVE_VER    3
+#define SAVE_VER    4
 
 #pragma pack(push, 1)
 typedef struct {
@@ -742,6 +781,7 @@ typedef struct {
     int16_t  saved_enemy_hp;
     int16_t  saved_enemy_heat;
     bool     saved_enemy_overloaded;
+    uint8_t  sound_volume;  /* v4: 0-10, default 8 */
 } SaveData;
 #pragma pack(pop)
 
@@ -810,6 +850,7 @@ static void game_save(EyePhantomApp* app) {
         data.saved_enemy_heat       = app->saved_enemy_heat;
         data.saved_enemy_overloaded = app->saved_enemy_overloaded;
     }
+    data.sound_volume = app->sound_volume;
 
     File* file = storage_file_alloc(storage);
     if(storage_file_open(file, SAVE_FILE, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
@@ -823,11 +864,16 @@ static void game_save(EyePhantomApp* app) {
 static bool game_load(EyePhantomApp* app) {
     Storage* storage = furi_record_open(RECORD_STORAGE);
     SaveData data;
+    memset(&data, 0, sizeof(data));  /* zero so new fields default cleanly on old saves */
     bool ok = false;
 
     File* file = storage_file_alloc(storage);
     if(storage_file_open(file, SAVE_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        if(storage_file_read(file, &data, sizeof(data)) == sizeof(data) &&
+        /* Read only as many bytes as the file holds — handles saves from older versions
+         * that are smaller than the current SaveData struct. */
+        uint32_t on_disk = storage_file_size(file);
+        uint32_t to_read = on_disk < (uint32_t)sizeof(data) ? on_disk : (uint32_t)sizeof(data);
+        if(storage_file_read(file, &data, to_read) == to_read &&
            data.magic == SAVE_MAGIC && data.ver >= 2 && data.ver <= SAVE_VER) {
             app->has_active = data.has_active;
             if(data.has_active) save_load_phantom(&app->active_phantom, &data.active);
@@ -856,6 +902,10 @@ static bool game_load(EyePhantomApp* app) {
                         app->stored[i].cls = CLASS_GLITCH;
                 if(app->has_saved_combat && (uint8_t)app->saved_enemy_phantom.cls >= 2)
                     app->saved_enemy_phantom.cls = CLASS_GLITCH;
+            }
+            /* v4: configurable volume */
+            if(data.ver >= 4) {
+                app->sound_volume = data.sound_volume;
             }
             ok = true;
         }
@@ -886,6 +936,130 @@ static void haptic_long_buzz(EyePhantomApp* app) {
     notification_message(app->notifications, &sequence_set_vibro_on);
     furi_delay_ms(300);
     notification_message(app->notifications, &sequence_reset_vibro);
+}
+
+/* ================================================================
+ * SOUND
+ * ================================================================ */
+
+typedef struct {
+    float    freq;
+    uint32_t dur_ms;
+} Note;
+
+/* Play a melody. volume is 0-10; 0 = silent. */
+static void sound_play(const Note* notes, size_t count, uint8_t volume) {
+    if(volume == 0) return;
+    float vol = (float)volume / 10.0f;
+    if(!furi_hal_speaker_acquire(200)) return;
+    for(size_t i = 0; i < count; i++) {
+        if(i > 0) {
+            furi_hal_speaker_stop();
+            furi_delay_ms(10);  /* brief silence for note articulation */
+        }
+        furi_hal_speaker_start(notes[i].freq, vol);
+        furi_delay_ms(notes[i].dur_ms);
+    }
+    furi_hal_speaker_stop();
+    furi_hal_speaker_release();
+}
+
+/* Play a single short beep. volume is 0-10. */
+static void sound_beep(float freq, uint32_t dur_ms, uint8_t volume) {
+    if(volume == 0) return;
+    float vol = (float)volume / 10.0f;
+    if(!furi_hal_speaker_acquire(50)) return;
+    furi_hal_speaker_start(freq, vol);
+    furi_delay_ms(dur_ms);
+    furi_hal_speaker_stop();
+    furi_hal_speaker_release();
+}
+
+/* Play a discovery chime unique to the phantom's class, protocol, and rarity.
+ *
+ * Root pitch is derived from the scan protocol (5 distinct tonics).
+ * Melodic shape is derived from the phantom's class:
+ *   BRAWLER  — triumphant major arpeggio  (root, M3, P5, octave)
+ *   DEFENDER — dignified 4th-5th cadence  (root, P4, P5, octave)
+ *   GLITCH   — unsettling chromatic burst  (root, +1, -1, tritone)
+ * Elite phantoms receive an additional two-octave flourish note.
+ */
+static void sound_play_found_phantom(const Phantom* p, uint8_t volume) {
+    if(volume == 0) return;
+
+    /* Root tonic per scan protocol */
+    static const float roots[5] = {
+        523.25f,  /* NEC     → C5 */
+        587.33f,  /* SONY    → D5 */
+        659.25f,  /* SAMSUNG → E5 */
+        698.46f,  /* RC5     → F5 */
+        783.99f,  /* NFC     → G5 */
+    };
+
+    /* Semitone offsets from root, per class (4 notes each) */
+    static const int8_t intervals[3][4] = {
+        {  0,  4,  7, 12 },  /* BRAWLER  — root, maj3, 5th, octave */
+        {  0,  5,  7, 12 },  /* DEFENDER — root, 4th, 5th, octave  */
+        {  0,  1, -1,  6 },  /* GLITCH   — root, +1, -1, tritone   */
+    };
+    static const uint32_t note_dur[3][4] = {
+        {  70,  70,  70, 250 },  /* BRAWLER  */
+        { 100, 100, 100, 280 },  /* DEFENDER */
+        {  50,  50,  50, 220 },  /* GLITCH   */
+    };
+
+    uint8_t cls  = (uint8_t)p->cls      < 3 ? (uint8_t)p->cls      : 0;
+    uint8_t prot = (uint8_t)p->protocol < 5 ? (uint8_t)p->protocol : 0;
+    float   root = roots[prot];
+    float   vol  = (float)volume / 10.0f;
+
+    /* Acquire speaker with generous timeout to cover worst-case 550ms melody */
+    if(!furi_hal_speaker_acquire(500)) return;
+
+    for(int i = 0; i < 4; i++) {
+        if(i > 0) {
+            furi_hal_speaker_stop();
+            furi_delay_ms(10);
+        }
+        float freq = root * powf(2.0f, (float)intervals[cls][i] / 12.0f);
+        furi_hal_speaker_start(freq, vol);
+        furi_delay_ms(note_dur[cls][i]);
+    }
+
+    /* Elite bonus — sharp two-octave flourish */
+    if(p->is_elite) {
+        furi_hal_speaker_stop();
+        furi_delay_ms(20);
+        furi_hal_speaker_start(root * 4.0f, vol);
+        furi_delay_ms(250);
+    }
+
+    furi_hal_speaker_stop();
+    furi_hal_speaker_release();
+}
+
+/* 5-note victory fanfare — played on SCENE_VICTORY. */
+static void sound_play_victory(uint8_t volume) {
+    static const Note m[] = {
+        {659.25f, 80}, {783.99f, 80}, {1046.50f, 80}, {783.99f, 80}, {1046.50f, 320}
+    };
+    sound_play(m, 5, volume);
+}
+
+/* 4-note mournful descent — played on SCENE_DEFEAT. */
+static void sound_play_defeat(uint8_t volume) {
+    static const Note m[] = {
+        {440.00f, 200}, {392.00f, 200}, {349.23f, 200}, {311.13f, 400}
+    };
+    sound_play(m, 4, volume);
+}
+
+/* 3-note alert chime — played at the start of combat. */
+static void sound_play_battle_start(uint8_t volume) {
+    static const Note m[] = {
+        {440.00f, 60}, {523.25f, 60}, {659.25f, 120}
+    };
+    sound_play(m, 3, volume);
 }
 
 /* ================================================================
@@ -2007,6 +2181,10 @@ static void app_input(InputEvent* event, void* context) {
                         app->pending_save = true;
                         strncpy(app->message, "SET ACTIVE!", 32);
                         app->message_timer = 60;
+                        /* Haptic confirmation — phantom selected from collection */
+                        notification_message(app->notifications, &sequence_set_vibro_on);
+                        furi_delay_ms(80);
+                        notification_message(app->notifications, &sequence_reset_vibro);
                         app->scene = SCENE_CAMP;
                     }
                 }
@@ -2090,6 +2268,8 @@ static void app_tick(void* context) {
         app->scene = SCENE_SUMMON;
         app->summon_reveal = true;
         app->reveal_timer = 0;
+        haptic_double_buzz(app);                                         /* feel the discovery */
+        sound_play_found_phantom(&app->pending_phantom, app->sound_volume); /* hear the discovery */
     }
 
     /* Process NFC tag detected in callback */
@@ -2101,6 +2281,8 @@ static void app_tick(void* context) {
         app->scene = SCENE_SUMMON;
         app->summon_reveal = true;
         app->reveal_timer = 0;
+        haptic_double_buzz(app);                                         /* feel the discovery */
+        sound_play_found_phantom(&app->pending_phantom, app->sound_volume); /* hear the discovery */
     }
 
     /* Scan timeout — auto-stop after ~30 seconds of no signal */
@@ -2126,6 +2308,7 @@ static void app_tick(void* context) {
                     app->has_saved_combat = false;
                     app->pending_save = true;
                     app->scene = SCENE_VICTORY;
+                    sound_play_victory(app->sound_volume);
                 } else if(app->combat.next_state == COMBAT_LOSE) {
                     /* Save enemy state so player can swap phantom and rematch */
                     app->saved_enemy_phantom   = app->combat.enemy.phantom;
@@ -2138,6 +2321,7 @@ static void app_tick(void* context) {
                     memset(&app->active_phantom, 0, sizeof(Phantom));
                     app->pending_save = true;
                     app->scene = SCENE_DEFEAT;
+                    sound_play_defeat(app->sound_volume);
                 } else {
                     app->combat.state = app->combat.next_state;
                 }
@@ -2202,6 +2386,7 @@ static EyePhantomApp* app_alloc(void) {
     app->scene     = SCENE_TITLE;
     app->running   = true;
     app->current_floor = 1;
+    app->sound_volume  = 8;  /* default: 80% volume */
 
     /* Initialize PRNG with non-zero seed */
     prng_seed(furi_hal_rtc_get_timestamp() | 1);
